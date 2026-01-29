@@ -106,9 +106,17 @@ class OptimizationService:
         team_sizes = [sum(x[i, t] for i in range(num_students)) for t in range(num_teams)]
         # Use sum of squared differences from preferred size
         for t in range(num_teams):
+            # OR-Tools CP-SAT does not support calling abs() directly on a
+            # linear expression in constraints. We model the absolute
+            # deviation using an auxiliary variable and AddAbsEquality.
             diff = model.NewIntVar(0, max_size, f'diff_team_{t}')
-            model.Add(diff == abs(team_sizes[t] - preferred_size))
-            objective_terms.append(-diff * 10)  # Penalty for deviation (negative because we maximize)
+            diff_raw = model.NewIntVar(-max_size, max_size, f'diff_raw_team_{t}')
+            # diff_raw = team_sizes[t] - preferred_size
+            model.Add(diff_raw == team_sizes[t] - preferred_size)
+            # diff = |diff_raw|
+            model.AddAbsEquality(diff, diff_raw)
+            # Penalty for deviation (negative because we maximize the objective)
+            objective_terms.append(-diff * 10)
         
         # Maximize objective
         model.Maximize(sum(objective_terms))

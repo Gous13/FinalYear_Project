@@ -49,8 +49,49 @@ def create_project():
         db.session.add(project)
         db.session.commit()
         
+        # Auto-compute similarities for all students to enable recommendations
+        try:
+            from routes.matching import compute_similarities
+            # Call the similarity computation function directly
+            from models.profile import StudentProfile
+            from models.matching import SimilarityScore
+            from services.nlp_service import get_nlp_service
+            
+            profiles = StudentProfile.query.all()
+            project_embedding = json.loads(project.description_embedding)
+            
+            for profile in profiles:
+                profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
+                if not profile_embedding:
+                    full_description = profile.get_full_description()
+                    profile_embedding = get_nlp_service().encode_text(full_description).tolist()
+                    profile.skills_embedding = json.dumps(profile_embedding)
+                
+                overall_sim = get_nlp_service().compute_similarity(project_embedding, profile_embedding)
+                
+                similarity = SimilarityScore.query.filter_by(
+                    profile_id=profile.id,
+                    project_id=project.id
+                ).first()
+                
+                if similarity:
+                    similarity.overall_similarity = overall_sim
+                else:
+                    similarity = SimilarityScore(
+                        profile_id=profile.id,
+                        project_id=project.id,
+                        overall_similarity=overall_sim
+                    )
+                    db.session.add(similarity)
+            
+            db.session.commit()
+        except Exception as e:
+            # Don't fail project creation if similarity computation fails
+            print(f"Warning: Failed to compute similarities for new project: {e}")
+            db.session.rollback()
+        
         return jsonify({
-            'message': 'Project created successfully',
+            'message': 'Project created successfully. Similarities computed for recommendations.',
             'project': project.to_dict()
         }), 201
         
@@ -65,7 +106,7 @@ def get_projects():
     try:
         projects = Project.query.all()
         return jsonify({
-            'projects': [project.to_dict() for project in projects]
+            'projects': [project.to_dict(include_teams=True) for project in projects]
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

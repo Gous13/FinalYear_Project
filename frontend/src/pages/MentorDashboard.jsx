@@ -59,20 +59,6 @@ const MentorDashboard = () => {
     projectMutation.mutate(projectData)
   }
 
-  const handleFormTeams = async (projectId) => {
-    try {
-      // First compute similarities
-      await api.post(`/matching/compute-similarities/${projectId}`)
-      toast.success('Similarities computed!')
-      
-      // Then form teams
-      const res = await api.post(`/matching/form-teams/${projectId}`)
-      toast.success(`Formed ${res.data.teams.length} teams!`)
-      queryClient.invalidateQueries(['projects'])
-    } catch (error) {
-      toast.error(error.response?.data?.error || 'Failed to form teams')
-    }
-  }
 
   return (
     <Layout>
@@ -251,7 +237,6 @@ const MentorDashboard = () => {
                 <ProjectCard
                   key={project.id}
                   project={project}
-                  onFormTeams={handleFormTeams}
                 />
               ))}
             </div>
@@ -266,7 +251,10 @@ const MentorDashboard = () => {
   )
 }
 
-const ProjectCard = ({ project, onFormTeams }) => {
+const ProjectCard = ({ project }) => {
+  // Count total students who have joined this project
+  const totalJoined = project.teams?.reduce((sum, team) => sum + (team.member_count || 0), 0) || 0
+  
   return (
     <div className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between">
@@ -276,30 +264,36 @@ const ProjectCard = ({ project, onFormTeams }) => {
           <div className="mt-3 flex items-center space-x-4 text-sm text-gray-500">
             <span>Team Size: {project.min_team_size}-{project.max_team_size}</span>
             <span className="px-2 py-1 bg-gray-100 rounded">{project.status}</span>
-            <span>{project.teams?.length || 0} teams formed</span>
+            <span className="font-medium text-primary-600">
+              {project.teams?.length || 0} team{project.teams?.length !== 1 ? 's' : ''} formed
+            </span>
+            <span className="text-gray-600">
+              {totalJoined} student{totalJoined !== 1 ? 's' : ''} joined
+            </span>
           </div>
-        </div>
-        <div className="ml-4 flex items-center space-x-2">
-          <button
-            onClick={() => onFormTeams(project.id)}
-            className="flex items-center px-3 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 text-sm"
-          >
-            <Sparkles className="w-4 h-4 mr-1" />
-            Form Teams
-          </button>
         </div>
       </div>
       {project.teams && project.teams.length > 0 && (
         <div className="mt-4 pt-4 border-t">
-          <p className="text-sm font-medium text-gray-700 mb-2">Teams:</p>
+          <p className="text-sm font-medium text-gray-700 mb-2">Formed Teams:</p>
           <div className="space-y-2">
             {project.teams.map((team) => (
-              <div key={team.id} className="flex items-center justify-between text-sm">
-                <span className="text-gray-700">{team.name}</span>
-                <span className="text-gray-500">{team.member_count} members</span>
+              <div key={team.id} className="flex items-center justify-between text-sm bg-gray-50 p-2 rounded">
+                <span className="text-gray-700 font-medium">{team.name}</span>
+                <span className="text-gray-500">{team.member_count} member{team.member_count !== 1 ? 's' : ''}</span>
               </div>
             ))}
           </div>
+        </div>
+      )}
+      {totalJoined > 0 && (!project.teams || project.teams.length === 0) && (
+        <div className="mt-4 pt-4 border-t">
+          <p className="text-sm text-gray-600">
+            {totalJoined} student{totalJoined !== 1 ? 's' : ''} joined. 
+            {totalJoined < project.preferred_team_size 
+              ? ` Need ${project.preferred_team_size - totalJoined} more to auto-form teams.`
+              : ' Teams will be auto-formed when enough students join.'}
+          </p>
         </div>
       )}
     </div>

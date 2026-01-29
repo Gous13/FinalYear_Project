@@ -85,6 +85,24 @@ def create_team():
                         if member.user_id:
                             _ = member.user
                 
+                # Check if we should auto-form teams (if project has enough joined students)
+                if project_id:
+                    # Import here to avoid circular import
+                    from routes.matching import _auto_form_teams_for_project
+                    success, teams_count, msg = _auto_form_teams_for_project(project_id)
+                    if success:
+                        # Reload team after auto-formation
+                        existing_team = Team.query.get(existing_team.id)
+                        if existing_team and existing_team.members:
+                            for member in existing_team.members:
+                                if member.user_id:
+                                    _ = member.user
+                        return jsonify({
+                            'message': f'Successfully joined! {msg}',
+                            'team': existing_team.to_dict() if existing_team else None,
+                            'teams_auto_formed': teams_count
+                        }), 200
+                
                 return jsonify({
                     'message': 'Successfully joined existing team',
                     'team': existing_team.to_dict()
@@ -120,6 +138,26 @@ def create_team():
             for member in team.members:
                 if member.user_id:
                     _ = member.user  # Trigger lazy load
+        
+        # Check if we should auto-form teams (if project has enough joined students)
+        if project_id:
+            # Import here to avoid circular import
+            from routes.matching import _auto_form_teams_for_project
+            success, teams_count, msg = _auto_form_teams_for_project(project_id)
+            if success:
+                # Team was deleted and recreated, so reload it
+                project = Project.query.get(project_id)
+                # Get the first team for this project (should be newly created)
+                new_team = Team.query.filter_by(project_id=project_id).first()
+                if new_team and new_team.members:
+                    for member in new_team.members:
+                        if member.user_id:
+                            _ = member.user
+                return jsonify({
+                    'message': f'Team created! {msg}',
+                    'team': new_team.to_dict() if new_team else None,
+                    'teams_auto_formed': teams_count
+                }), 201
         
         return jsonify({
             'message': 'Team created successfully',

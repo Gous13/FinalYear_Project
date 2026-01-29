@@ -21,6 +21,133 @@ nlp_service = get_nlp_service()
 optimization_service = OptimizationService()
 explanation_service = ExplanationService()
 
+def _auto_form_teams_for_project(project_id):
+    """
+    Helper function to automatically form teams for a project when enough students have joined.
+    This function:
+    1. Gets all students who have joined the project (via TeamMember)
+    2. Checks if we have enough students (>= preferred_team_size)
+    3. Checks if teams haven't been auto-formed yet (status is 'open' or teams are 'forming')
+    4. If yes, uses optimization to form optimal teams
+    5. Deletes old ad-hoc teams and creates optimized teams
+    
+    Returns: (success: bool, teams_formed: int, message: str)
+    """
+    try:
+        project = Project.query.get(project_id)
+        if not project:
+            return False, 0, 'Project not found'
+        
+        # Check if teams have already been auto-formed (status is 'team_forming' or 'in_progress')
+        if project.status in ['team_forming', 'in_progress']:
+            # Check if teams exist and are not just 'forming' status
+            existing_teams = Team.query.filter_by(project_id=project_id).all()
+            if existing_teams and any(t.status != 'forming' for t in existing_teams):
+                return False, 0, 'Teams already formed'
+        
+        # Get all students who have joined this project (via TeamMember)
+        joined_members = TeamMember.query.join(Team).filter(
+            Team.project_id == project_id
+        ).all()
+        
+        if not joined_members:
+            return False, 0, 'No students have joined yet'
+        
+        # Get unique user IDs who have joined
+        joined_user_ids = list(set([m.user_id for m in joined_members]))
+        
+        # Check if we have enough students (need at least preferred_team_size)
+        if len(joined_user_ids) < project.preferred_team_size:
+            return False, 0, f'Not enough students yet ({len(joined_user_ids)}/{project.preferred_team_size})'
+        
+        # Get profiles for these users
+        joined_profiles = StudentProfile.query.filter(
+            StudentProfile.user_id.in_(joined_user_ids)
+        ).all()
+        
+        if len(joined_profiles) < project.min_team_size:
+            return False, 0, f'Not enough profiles ({len(joined_profiles)}/{project.min_team_size})'
+        
+        # Get similarity scores for these profiles
+        similarity_scores = {}
+        for profile in joined_profiles:
+            similarity = SimilarityScore.query.filter_by(
+                profile_id=profile.id,
+                project_id=project_id
+            ).first()
+            
+            if similarity:
+                similarity_scores[profile.id] = similarity.overall_similarity
+            else:
+                # Compute on the fly if missing
+                project_embedding = json.loads(project.description_embedding) if project.description_embedding else None
+                if not project_embedding:
+                    project_text = f"{project.description} {project.required_skills}"
+                    project_embedding = nlp_service.encode_text(project_text).tolist()
+                    project.description_embedding = json.dumps(project_embedding)
+                
+                profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
+                if not profile_embedding:
+                    full_description = profile.get_full_description()
+                    profile_embedding = nlp_service.encode_text(full_description).tolist()
+                    profile.skills_embedding = json.dumps(profile_embedding)
+                
+                overall_sim = nlp_service.compute_similarity(project_embedding, profile_embedding)
+                similarity_scores[profile.id] = overall_sim
+        
+        # Delete existing ad-hoc teams for this project (we'll recreate them optimally)
+        existing_teams = Team.query.filter_by(project_id=project_id).all()
+        for team in existing_teams:
+            db.session.delete(team)
+        db.session.flush()
+        
+        # Form teams using optimization (only for joined students)
+        constraints = {
+            'min_team_size': project.min_team_size,
+            'max_team_size': project.max_team_size,
+            'preferred_team_size': project.preferred_team_size
+        }
+        team_assignments = optimization_service.form_teams(
+            joined_profiles, project, similarity_scores, constraints
+        )
+        
+        # Create optimized teams in database
+        team_ids = []
+        for idx, team_profile_ids in enumerate(team_assignments):
+            if not team_profile_ids:
+                continue
+            
+            team = Team(
+                name=f"{project.title} - Team {idx + 1}",
+                project_id=project_id,
+                status='active',  # Teams are ready when auto-formed
+                description=f"AI-optimized team for {project.title}"
+            )
+            db.session.add(team)
+            db.session.flush()
+            team_ids.append(team.id)
+            
+            # Add members
+            for profile_id in team_profile_ids:
+                profile = StudentProfile.query.get(profile_id)
+                if profile:
+                    member = TeamMember(
+                        team_id=team.id,
+                        user_id=profile.user_id,
+                        role='leader' if team_profile_ids.index(profile_id) == 0 else 'member',
+                        status='active'
+                    )
+                    db.session.add(member)
+        
+        project.status = 'team_forming'
+        db.session.commit()
+        
+        return True, len(team_ids), f'Successfully formed {len(team_ids)} team(s)'
+        
+    except Exception as e:
+        db.session.rollback()
+        return False, 0, f'Error forming teams: {str(e)}'
+
 @matching_bp.route('/compute-similarities/<int:project_id>', methods=['POST'])
 @jwt_required()
 def compute_similarities(project_id):
@@ -114,7 +241,11 @@ def form_teams(project_id):
         if not project:
             return jsonify({'error': 'Project not found'}), 404
         
-        data = request.get_json() or {}
+        # Some clients may call this endpoint without a JSON body or with a non-JSON
+        # Content-Type (e.g. form-encoded). Using silent=True prevents Flask from
+        # raising an UnsupportedMediaType error in those cases and lets us fallback
+        # to empty constraints by default, which keeps existing behavior intact.
+        data = request.get_json(silent=True) or {}
         constraints = data.get('constraints', {})
         
         # Get all student profiles
