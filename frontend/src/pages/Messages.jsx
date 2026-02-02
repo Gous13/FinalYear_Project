@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
@@ -6,8 +7,12 @@ import toast from 'react-hot-toast'
 import { Mail, Send, UserPlus, Search } from 'lucide-react'
 
 const Messages = () => {
+  const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
-  const [selectedUserId, setSelectedUserId] = useState(null)
+  const withUserId = searchParams.get('with')
+  const [selectedUserId, setSelectedUserId] = useState(
+    withUserId ? parseInt(withUserId, 10) : null
+  )
   const [showNewChat, setShowNewChat] = useState(false)
   const [emailSearch, setEmailSearch] = useState('')
   const [replyText, setReplyText] = useState('')
@@ -67,6 +72,13 @@ const Messages = () => {
   })
 
   useEffect(() => {
+    if (withUserId) {
+      const id = parseInt(withUserId, 10)
+      if (!isNaN(id)) setSelectedUserId(id)
+    }
+  }, [withUserId])
+
+  useEffect(() => {
     if (threadData?.messages?.length) scrollToBottom()
   }, [threadData?.messages])
 
@@ -87,11 +99,19 @@ const Messages = () => {
     setSelectedUserId(user.id)
     setShowNewChat(false)
     setEmailSearch('')
+    setSearchParams({ with: user.id })
   }
 
   const handleNewMessage = () => {
     setSelectedUserId(null)
     setShowNewChat(true)
+    setSearchParams({})
+  }
+
+  const handleSelectConversation = (userId) => {
+    setSelectedUserId(userId)
+    setShowNewChat(false)
+    setSearchParams(userId ? { with: userId } : {})
   }
 
   const filteredRecipients = recipientsData || []
@@ -177,7 +197,7 @@ const Messages = () => {
                   return (
                     <button
                       key={other.id}
-                      onClick={() => { setSelectedUserId(other.id); setShowNewChat(false) }}
+                      onClick={() => handleSelectConversation(other.id)}
                       className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50 ${
                         isSelected ? 'bg-primary-50 border-l-4 border-l-primary-600' : ''
                       }`}

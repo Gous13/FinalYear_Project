@@ -1,12 +1,15 @@
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
-import { Users, MessageSquare, FileText, Calendar, User } from 'lucide-react'
+import { Users, MessageSquare, FileText, Calendar, User, MessageCircle } from 'lucide-react'
 
 const TeamWorkspace = () => {
   const { teamId } = useParams()
+  const navigate = useNavigate()
+  const { user } = useAuth()
   const queryClient = useQueryClient()
 
   const { data: team, isLoading } = useQuery({
@@ -65,17 +68,28 @@ const TeamWorkspace = () => {
                 key={member.id}
                 className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
               >
-                <div className="flex items-center">
-                  <div className="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center">
-                    <User className="w-6 h-6 text-primary-600" />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center min-w-0">
+                    <div className="w-12 h-12 bg-primary-100 rounded-full flex items-center justify-center shrink-0">
+                      <User className="w-6 h-6 text-primary-600" />
+                    </div>
+                    <div className="ml-4 min-w-0">
+                      <p className="font-semibold text-gray-900">{member.user_name}</p>
+                      <p className="text-sm text-gray-600 truncate">{member.user_email}</p>
+                      <span className="inline-block mt-1 px-2 py-1 bg-gray-100 rounded text-xs">
+                        {member.role}
+                      </span>
+                    </div>
                   </div>
-                  <div className="ml-4">
-                    <p className="font-semibold text-gray-900">{member.user_name}</p>
-                    <p className="text-sm text-gray-600">{member.user_email}</p>
-                    <span className="inline-block mt-1 px-2 py-1 bg-gray-100 rounded text-xs">
-                      {member.role}
-                    </span>
-                  </div>
+                  {member.user_id !== user?.id && (
+                    <button
+                      onClick={() => navigate(`/messages?with=${member.user_id}`)}
+                      className="p-2 text-primary-600 hover:bg-primary-50 rounded-lg shrink-0"
+                      title="Message"
+                    >
+                      <MessageCircle className="w-5 h-5" />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
