@@ -1,15 +1,17 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
 import { 
   Plus, Briefcase, Users, Sparkles, Settings, 
-  CheckCircle, XCircle, Play, Eye 
+  CheckCircle, XCircle, Play, Eye, UsersRound 
 } from 'lucide-react'
 
 const MentorDashboard = () => {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const [showProjectModal, setShowProjectModal] = useState(false)
   const [projectData, setProjectData] = useState({
     title: '',
@@ -237,6 +239,7 @@ const MentorDashboard = () => {
                 <ProjectCard
                   key={project.id}
                   project={project}
+                  navigate={navigate}
                 />
               ))}
             </div>
@@ -251,7 +254,7 @@ const MentorDashboard = () => {
   )
 }
 
-const ProjectCard = ({ project }) => {
+const ProjectCard = ({ project, navigate }) => {
   // Count total students who have joined this project
   const totalJoined = project.teams?.reduce((sum, team) => sum + (team.member_count || 0), 0) || 0
   
@@ -259,7 +262,19 @@ const ProjectCard = ({ project }) => {
     <div className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between">
         <div className="flex-1">
-          <h3 className="text-lg font-semibold text-gray-900">{project.title}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-900">{project.title}</h3>
+            {totalJoined > 0 && (
+              <button
+                onClick={() => navigate(`/project/${project.id}/workspace`)}
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm text-primary-600 hover:bg-primary-50 rounded transition-colors"
+                title="View team members"
+              >
+                <UsersRound className="w-4 h-4" />
+                View Team
+              </button>
+            )}
+          </div>
           <p className="text-sm text-gray-600 mt-1 line-clamp-2">{project.description}</p>
           <div className="mt-3 flex items-center space-x-4 text-sm text-gray-500">
             <span>Team Size: {project.min_team_size}-{project.max_team_size}</span>

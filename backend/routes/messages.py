@@ -1,5 +1,6 @@
 """
 Internal messaging routes - universal for Students, Mentors, and Admins
+Extends to support project group chats (team collaboration)
 """
 
 from flask import Blueprint, request, jsonify
@@ -7,6 +8,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
 from models.message import Message
+from models.group_chat import GroupChat, GroupChatMember, GroupMessage
 from datetime import datetime
 
 messages_bp = Blueprint('messages', __name__)
@@ -31,7 +33,7 @@ def get_recipients():
 @messages_bp.route('/conversations', methods=['GET'])
 @jwt_required()
 def get_conversations():
-    """Get list of conversations (users with message exchange) with last message and unread count"""
+    """Get list of conversations: direct (1-to-1) + project group chats"""
     try:
         current_user_id = int(get_jwt_identity())
         # Get all messages where current user is sender or receiver (not deleted)
@@ -47,8 +49,9 @@ def get_conversations():
             other_ids.add(r[0])
         for r in received:
             other_ids.add(r[0])
-        
+
         conversations = []
+        # Direct (1-to-1) conversations
         for other_id in other_ids:
             other = User.query.get(other_id)
             if not other or not other.is_active:
@@ -66,11 +69,28 @@ def get_conversations():
                 Message.is_read == False
             ).count()
             conversations.append({
+                'type': 'direct',
                 'other_user': other.to_dict(),
                 'last_message': last_msg.to_dict(include_sender=True),
                 'unread_count': unread,
                 'last_at': last_msg.created_at.isoformat() if last_msg.created_at else None
             })
+
+        # Project group chats (where current user is a member)
+        user_group_memberships = GroupChatMember.query.filter_by(user_id=current_user_id).all()
+        for gcm in user_group_memberships:
+            gc = gcm.group_chat
+            if not gc or not gc.project:
+                continue
+            last_msg = GroupMessage.query.filter_by(group_chat_id=gc.id).order_by(GroupMessage.created_at.desc()).first()
+            conversations.append({
+                'type': 'group',
+                'group_chat': gc.to_dict(include_project=True),
+                'last_message': last_msg.to_dict(include_sender=True) if last_msg else None,
+                'unread_count': 0,  # Group chats don't track per-user read
+                'last_at': last_msg.created_at.isoformat() if last_msg and last_msg.created_at else gc.created_at.isoformat() if gc.created_at else None
+            })
+
         conversations.sort(key=lambda x: x['last_at'] or '', reverse=True)
         return jsonify({'conversations': conversations}), 200
     except Exception as e:
@@ -193,6 +213,69 @@ def get_unread_count():
         return jsonify({'unread_count': count}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# --- Group Chat endpoints ---
+
+@messages_bp.route('/group-chats/<int:group_chat_id>', methods=['GET'])
+@jwt_required()
+def get_group_chat(group_chat_id):
+    """Get group chat with messages. User must be a member."""
+    try:
+        current_user_id = int(get_jwt_identity())
+        gc = GroupChat.query.get(group_chat_id)
+        if not gc:
+            return jsonify({'error': 'Group chat not found'}), 404
+
+        # Check membership
+        is_member = GroupChatMember.query.filter_by(group_chat_id=group_chat_id, user_id=current_user_id).first()
+        if not is_member:
+            return jsonify({'error': 'You are not a member of this group chat'}), 403
+
+        messages = GroupMessage.query.filter_by(group_chat_id=group_chat_id).order_by(GroupMessage.created_at.asc()).all()
+        return jsonify({
+            'group_chat': gc.to_dict(include_members=True, include_project=True),
+            'messages': [m.to_dict(include_sender=True) for m in messages]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@messages_bp.route('/group-chats/<int:group_chat_id>/messages', methods=['POST'])
+@jwt_required()
+def send_group_message(group_chat_id):
+    """Send a message to a group chat. User must be a member."""
+    try:
+        current_user_id = int(get_jwt_identity())
+        gc = GroupChat.query.get(group_chat_id)
+        if not gc:
+            return jsonify({'error': 'Group chat not found'}), 404
+
+        # Check membership
+        is_member = GroupChatMember.query.filter_by(group_chat_id=group_chat_id, user_id=current_user_id).first()
+        if not is_member:
+            return jsonify({'error': 'You are not a member of this group chat'}), 403
+
+        data = request.get_json()
+        content = (data.get('content') or '').strip()
+        if not content:
+            return jsonify({'error': 'Message content is required'}), 400
+
+        msg = GroupMessage(
+            group_chat_id=group_chat_id,
+            sender_id=current_user_id,
+            content=content
+        )
+        db.session.add(msg)
+        db.session.commit()
+
+        return jsonify({
+            'message': 'Message sent',
+            'msg': msg.to_dict(include_sender=True)
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 
 @messages_bp.route('/<int:msg_id>/read', methods=['PUT'])
 @jwt_required()

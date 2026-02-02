@@ -4,14 +4,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
-import { Mail, Send, UserPlus, Search } from 'lucide-react'
+import { Mail, Send, UserPlus, Search, Users } from 'lucide-react'
+import { useAuth } from '../contexts/AuthContext'
 
 const Messages = () => {
+  const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const withUserId = searchParams.get('with')
+  const groupChatIdParam = searchParams.get('group')
   const [selectedUserId, setSelectedUserId] = useState(
     withUserId ? parseInt(withUserId, 10) : null
+  )
+  const [selectedGroupChatId, setSelectedGroupChatId] = useState(
+    groupChatIdParam ? parseInt(groupChatIdParam, 10) : null
   )
   const [showNewChat, setShowNewChat] = useState(false)
   const [emailSearch, setEmailSearch] = useState('')
@@ -34,7 +40,16 @@ const Messages = () => {
       const res = await api.get(`/messages/conversations/${selectedUserId}`)
       return res.data
     },
-    enabled: !!selectedUserId && !showNewChat
+    enabled: !!selectedUserId && !selectedGroupChatId && !showNewChat
+  })
+
+  const { data: groupChatData, isLoading: groupChatLoading } = useQuery({
+    queryKey: ['messages-group-chat', selectedGroupChatId],
+    queryFn: async () => {
+      const res = await api.get(`/messages/group-chats/${selectedGroupChatId}`)
+      return res.data
+    },
+    enabled: !!selectedGroupChatId
   })
 
   useEffect(() => {
@@ -71,47 +86,92 @@ const Messages = () => {
     onError: (e) => toast.error(e.response?.data?.error || 'Failed to send')
   })
 
+  const sendGroupMutation = useMutation({
+    mutationFn: async (data) => api.post(`/messages/group-chats/${selectedGroupChatId}/messages`, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['messages-conversations'])
+      queryClient.invalidateQueries(['messages-group-chat', selectedGroupChatId])
+      setReplyText('')
+      toast.success('Sent!')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'Failed to send')
+  })
+
   useEffect(() => {
     if (withUserId) {
       const id = parseInt(withUserId, 10)
-      if (!isNaN(id)) setSelectedUserId(id)
+      if (!isNaN(id)) {
+        setSelectedUserId(id)
+        setSelectedGroupChatId(null)
+      }
     }
   }, [withUserId])
+
+  useEffect(() => {
+    if (groupChatIdParam) {
+      const id = parseInt(groupChatIdParam, 10)
+      if (!isNaN(id)) {
+        setSelectedGroupChatId(id)
+        setSelectedUserId(null)
+      }
+    }
+  }, [groupChatIdParam])
 
   useEffect(() => {
     if (threadData?.messages?.length) scrollToBottom()
   }, [threadData?.messages])
 
+  useEffect(() => {
+    if (groupChatData?.messages?.length) scrollToBottom()
+  }, [groupChatData?.messages])
+
   const conversations = conversationsData || []
   const otherUser = threadData?.other_user
   const messages = threadData?.messages || []
+  const groupChat = groupChatData?.group_chat
+  const groupMessages = groupChatData?.messages || []
+
+  const hasSelection = !!selectedUserId || !!selectedGroupChatId
 
   const handleSendReply = (e) => {
     e.preventDefault()
     const content = replyText.trim()
     if (!content) return
-    const receiverId = selectedUserId
-    if (!receiverId) return
-    sendMutation.mutate({ receiver_id: receiverId, content })
+    if (selectedGroupChatId) {
+      sendGroupMutation.mutate({ content })
+    } else {
+      const receiverId = selectedUserId
+      if (!receiverId) return
+      sendMutation.mutate({ receiver_id: receiverId, content })
+    }
   }
 
-  const handleStartNewChat = (user) => {
-    setSelectedUserId(user.id)
+  const handleStartNewChat = (targetUser) => {
+    setSelectedUserId(targetUser.id)
+    setSelectedGroupChatId(null)
     setShowNewChat(false)
     setEmailSearch('')
-    setSearchParams({ with: user.id })
+    setSearchParams({ with: targetUser.id })
   }
 
   const handleNewMessage = () => {
     setSelectedUserId(null)
+    setSelectedGroupChatId(null)
     setShowNewChat(true)
     setSearchParams({})
   }
 
-  const handleSelectConversation = (userId) => {
-    setSelectedUserId(userId)
+  const handleSelectConversation = (conv) => {
     setShowNewChat(false)
-    setSearchParams(userId ? { with: userId } : {})
+    if (conv.type === 'group') {
+      setSelectedGroupChatId(conv.group_chat.id)
+      setSelectedUserId(null)
+      setSearchParams({ group: conv.group_chat.id })
+    } else {
+      setSelectedUserId(conv.other_user.id)
+      setSelectedGroupChatId(null)
+      setSearchParams({ with: conv.other_user.id })
+    }
   }
 
   const filteredRecipients = recipientsData || []
@@ -190,27 +250,34 @@ const Messages = () => {
                 </div>
               ) : (
                 conversations.map((conv) => {
-                  const other = conv.other_user
+                  const isGroup = conv.type === 'group'
+                  const key = isGroup ? `group-${conv.group_chat?.id}` : `user-${conv.other_user?.id}`
+                  const displayName = isGroup ? (conv.group_chat?.project_title || conv.group_chat?.name) : conv.other_user?.full_name
                   const last = conv.last_message
                   const preview = last?.content?.length > 40 ? last.content.slice(0, 40) + '...' : last?.content || ''
-                  const isSelected = selectedUserId === other.id
+                  const isSelected = isGroup
+                    ? selectedGroupChatId === conv.group_chat?.id
+                    : selectedUserId === conv.other_user?.id
                   return (
                     <button
-                      key={other.id}
-                      onClick={() => handleSelectConversation(other.id)}
+                      key={key}
+                      onClick={() => handleSelectConversation(conv)}
                       className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50 ${
                         isSelected ? 'bg-primary-50 border-l-4 border-l-primary-600' : ''
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-900 truncate">{other.full_name}</span>
-                        {conv.unread_count > 0 && (
+                      <div className="flex items-center justify-between gap-2">
+                        {isGroup && <Users className="w-4 h-4 shrink-0 text-primary-600" />}
+                        <span className="font-medium text-gray-900 truncate">{displayName}</span>
+                        {!isGroup && conv.unread_count > 0 && (
                           <span className="flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white">
                             {conv.unread_count}
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 truncate mt-0.5">{preview}</p>
+                      <p className="text-sm text-gray-500 truncate mt-0.5">
+                        {isGroup && preview ? `${last?.sender_name || 'Someone'}: ` : ''}{preview}
+                      </p>
                     </button>
                   )
                 })
@@ -220,7 +287,7 @@ const Messages = () => {
 
           {/* Right: Chat thread */}
           <div className="flex-1 flex flex-col min-w-0">
-            {!selectedUserId ? (
+            {!hasSelection ? (
               <div className="flex-1 flex items-center justify-center text-gray-500">
                 <div className="text-center">
                   <Mail className="w-16 h-16 mx-auto text-gray-300 mb-4" />
@@ -228,7 +295,69 @@ const Messages = () => {
                   <p className="text-sm mt-1">or start a new chat</p>
                 </div>
               </div>
+            ) : selectedGroupChatId ? (
+              /* Group chat */
+              <>
+                <div className="p-4 border-b border-gray-200 flex items-center gap-2">
+                  <Users className="w-5 h-5 text-primary-600" />
+                  <div>
+                    <h3 className="font-semibold text-gray-900">{groupChat?.project_title || groupChat?.name}</h3>
+                    <p className="text-xs text-gray-500">Team group chat • {groupChat?.members?.length || 0} members</p>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {groupChatLoading ? (
+                    <div className="text-center py-8 text-gray-500">Loading...</div>
+                  ) : (
+                    groupMessages.map((msg) => {
+                      const isMine = msg.sender_id === user?.id
+                      return (
+                        <div
+                          key={msg.id}
+                          className={`flex ${isMine ? 'justify-end' : 'justify-start'}`}
+                        >
+                          <div
+                            className={`max-w-[75%] rounded-2xl px-4 py-2 ${
+                              isMine
+                                ? 'bg-primary-600 text-white rounded-br-md'
+                                : 'bg-gray-200 text-gray-900 rounded-bl-md'
+                            }`}
+                          >
+                            {!isMine && (
+                              <p className="text-xs font-medium text-gray-600 mb-0.5">{msg.sender_name}</p>
+                            )}
+                            <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                            <p className={`text-xs mt-1 ${isMine ? 'text-primary-100' : 'text-gray-500'}`}>
+                              {msg.created_at ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                            </p>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+                <form onSubmit={handleSendReply} className="p-4 border-t border-gray-200">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      placeholder="Type a message..."
+                      className="flex-1 px-4 py-3 border border-gray-300 rounded-full focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!replyText.trim() || sendGroupMutation.isLoading}
+                      className="p-3 bg-primary-600 text-white rounded-full hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Send className="w-5 h-5" />
+                    </button>
+                  </div>
+                </form>
+              </>
             ) : (
+              /* Direct (1-to-1) chat */
               <>
                 <div className="p-4 border-b border-gray-200 flex items-center">
                   <div>

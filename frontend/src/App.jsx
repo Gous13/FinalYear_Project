@@ -7,6 +7,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import StudentDashboard from './pages/StudentDashboard'
 import TeamWorkspace from './pages/TeamWorkspace'
+import ProjectWorkspace from './pages/ProjectWorkspace'
 import MentorDashboard from './pages/MentorDashboard'
 import AdminDashboard from './pages/AdminDashboard'
 import Messages from './pages/Messages'
@@ -34,6 +35,14 @@ function App() {
               element={
                 <PrivateRoute>
                   <TeamWorkspace />
+                </PrivateRoute>
+              }
+            />
+            <Route
+              path="/project/:projectId/workspace"
+              element={
+                <PrivateRoute requiredRole="mentor">
+                  <ProjectWorkspace />
                 </PrivateRoute>
               }
             />

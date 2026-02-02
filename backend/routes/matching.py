@@ -141,7 +141,15 @@ def _auto_form_teams_for_project(project_id):
         
         project.status = 'team_forming'
         db.session.commit()
-        
+
+        # Ensure project group chat exists for team collaboration
+        try:
+            from services.group_chat_service import ensure_project_group_chat
+            ensure_project_group_chat(project_id)
+            db.session.commit()
+        except Exception:
+            pass  # Don't fail team formation if group chat fails
+
         return True, len(team_ids), f'Successfully formed {len(team_ids)} team(s)'
         
     except Exception as e:
@@ -303,7 +311,15 @@ def form_teams(project_id):
         
         project.status = 'team_forming'
         db.session.commit()
-        
+
+        # Ensure project group chat exists for team collaboration
+        try:
+            from services.group_chat_service import ensure_project_group_chat
+            ensure_project_group_chat(project_id)
+            db.session.commit()
+        except Exception:
+            pass  # Don't fail team formation if group chat fails
+
         # Query teams fresh to ensure relationships are loaded
         created_teams = []
         for team_id in team_ids:

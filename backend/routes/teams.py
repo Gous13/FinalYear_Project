@@ -85,6 +85,12 @@ def create_team():
                         if member.user_id:
                             _ = member.user
                 
+                # Ensure project group chat exists (mentor + students)
+                if project_id:
+                    from services.group_chat_service import ensure_project_group_chat
+                    ensure_project_group_chat(project_id)
+                    db.session.commit()
+
                 # Check if we should auto-form teams (if project has enough joined students)
                 if project_id:
                     # Import here to avoid circular import
@@ -130,6 +136,12 @@ def create_team():
         )
         db.session.add(member)
         db.session.commit()
+
+        # Ensure project group chat exists (mentor + students)
+        if project_id:
+            from services.group_chat_service import ensure_project_group_chat
+            ensure_project_group_chat(project_id)
+            db.session.commit()
         
         # Reload team to ensure relationships are loaded
         team = Team.query.get(team.id)
@@ -220,8 +232,23 @@ def get_team(team_id):
                 if member.user_id:
                     _ = member.user  # Trigger lazy load
         
+        team_dict = team.to_dict()
+        # Include project group chat id for student workspace (same chat as mentor)
+        if team.project_id:
+            from services.group_chat_service import ensure_project_group_chat
+            from models.group_chat import GroupChat
+            group_chat, _ = ensure_project_group_chat(team.project_id)
+            if group_chat:
+                db.session.commit()
+                team_dict['group_chat_id'] = group_chat.id
+            else:
+                gc = GroupChat.query.filter_by(project_id=team.project_id).first()
+                team_dict['group_chat_id'] = gc.id if gc else None
+        else:
+            team_dict['group_chat_id'] = None
+        
         return jsonify({
-            'team': team.to_dict()
+            'team': team_dict
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -266,6 +293,12 @@ def add_member(team_id):
         
         db.session.add(member)
         db.session.commit()
+
+        # Ensure project group chat exists when adding to project team
+        if team.project_id:
+            from services.group_chat_service import ensure_project_group_chat
+            ensure_project_group_chat(team.project_id)
+            db.session.commit()
         
         return jsonify({
             'message': 'Member added successfully',

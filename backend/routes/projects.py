@@ -126,6 +126,52 @@ def get_project(project_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+@projects_bp.route('/projects/<int:project_id>/members', methods=['GET'])
+@jwt_required()
+def get_project_members(project_id):
+    """Get all students who joined this project (across all teams). For View Team / View Members."""
+    try:
+        from models.team import Team, TeamMember
+
+        project = Project.query.get(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+
+        members = TeamMember.query.join(Team).filter(Team.project_id == project_id).all()
+        seen = set()
+        unique_members = []
+        for m in members:
+            if m.user_id in seen:
+                continue
+            seen.add(m.user_id)
+            unique_members.append({
+                'user_id': m.user_id,
+                'name': m.user.full_name if m.user else 'Unknown',
+                'email': m.user.email if m.user else ''
+            })
+
+        # Ensure group chat exists when members exist (for Workspace Group Chat option)
+        group_chat_obj = None
+        if members:
+            from services.group_chat_service import ensure_project_group_chat
+            group_chat_obj, _ = ensure_project_group_chat(project_id)
+            if group_chat_obj:
+                db.session.commit()
+
+        from models.group_chat import GroupChat
+        if not group_chat_obj:
+            group_chat_obj = GroupChat.query.filter_by(project_id=project_id).first()
+
+        return jsonify({
+            'project_id': project_id,
+            'project_title': project.title,
+            'members': unique_members,
+            'group_chat_id': group_chat_obj.id if group_chat_obj else None
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @projects_bp.route('/hackathons', methods=['POST'])
 @jwt_required()
 @mentor_or_admin_required
