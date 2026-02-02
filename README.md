@@ -200,6 +200,12 @@ The system supports three roles:
 ### Admin
 - `GET /api/admin/stats` - Get system statistics
 - `GET /api/admin/logs` - Get activity logs
+- `POST /api/admin/reset-projects` - Reset project data (keeps users and profiles)
+- `POST /api/admin/reset-full` - Full system reset (removes all data)
+
+**Reset Projects** (Admin only): Clears projects, teams, hackathons, matching data. Users and profiles kept. Use "Reset Projects" button or `python reset_projects.py`.
+
+**Full Reset** (Admin only): Deletes ALL data (users, profiles, projects, teams, messages, logs). Empty database. Roles preserved. Use "Full Reset" button or `python reset_full.py`.
 
 ## 🚢 Deployment
 

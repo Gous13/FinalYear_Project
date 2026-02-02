@@ -7,8 +7,11 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User, Role
 from models.analytics import SystemLog
-from models.project import Project
-from models.team import Team
+from models.project import Project, Hackathon
+from models.team import Team, TeamMember
+from models.matching import MatchExplanation, SimilarityScore
+from models.profile import StudentProfile
+from models.message import Message
 from utils.decorators import admin_required
 
 admin_bp = Blueprint('admin', __name__)
@@ -85,6 +88,76 @@ def get_all_users():
             'users': [user.to_dict() for user in users]
         }), 200
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/reset-projects', methods=['POST'])
+@jwt_required()
+@admin_required
+def reset_projects():
+    """Reset all project-related data. Keeps users and profiles intact."""
+    try:
+        match_exp_count = MatchExplanation.query.delete()
+        sim_count = SimilarityScore.query.delete()
+        team_member_count = TeamMember.query.delete()
+        team_count = Team.query.delete()
+        project_count = Project.query.delete()
+        hackathon_count = Hackathon.query.delete()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Project data reset successfully',
+            'removed': {
+                'match_explanations': match_exp_count,
+                'similarity_scores': sim_count,
+                'team_members': team_member_count,
+                'teams': team_count,
+                'projects': project_count,
+                'hackathons': hackathon_count
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/reset-full', methods=['POST'])
+@jwt_required()
+@admin_required
+def reset_full():
+    """Full system reset. Removes all users, profiles, projects, teams, messages, logs. Keeps roles for fresh registration."""
+    try:
+        match_exp_count = MatchExplanation.query.delete()
+        sim_count = SimilarityScore.query.delete()
+        team_member_count = TeamMember.query.delete()
+        team_count = Team.query.delete()
+        msg_count = Message.query.delete()
+        profile_count = StudentProfile.query.delete()
+        project_count = Project.query.delete()
+        hackathon_count = Hackathon.query.delete()
+        log_count = SystemLog.query.delete()
+        user_count = User.query.delete()
+        
+        db.session.commit()
+        
+        return jsonify({
+            'message': 'Full system reset. Database empty. Roles preserved for new registration.',
+            'removed': {
+                'match_explanations': match_exp_count,
+                'similarity_scores': sim_count,
+                'team_members': team_member_count,
+                'teams': team_count,
+                'messages': msg_count,
+                'profiles': profile_count,
+                'projects': project_count,
+                'hackathons': hackathon_count,
+                'logs': log_count,
+                'users': user_count
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
 @admin_bp.route('/init-roles', methods=['POST'])

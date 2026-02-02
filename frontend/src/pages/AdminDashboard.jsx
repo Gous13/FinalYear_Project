@@ -1,9 +1,16 @@
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
-import { Settings, Users, Briefcase, Activity, BarChart3 } from 'lucide-react'
+import toast from 'react-hot-toast'
+import { Settings, Users, Briefcase, Activity, BarChart3, RotateCcw, Trash2 } from 'lucide-react'
 
 const AdminDashboard = () => {
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [showFullResetConfirm, setShowFullResetConfirm] = useState(false)
   const { data: stats, isLoading } = useQuery({
     queryKey: ['admin-stats'],
     queryFn: async () => {
@@ -28,6 +35,29 @@ const AdminDashboard = () => {
     }
   })
 
+  const resetProjectsMutation = useMutation({
+    mutationFn: () => api.post('/admin/reset-projects'),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['admin-stats'])
+      queryClient.invalidateQueries(['admin-logs'])
+      setShowResetConfirm(false)
+      toast.success('Project data reset. Users and profiles preserved.')
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'Reset failed')
+  })
+
+  const resetFullMutation = useMutation({
+    mutationFn: () => api.post('/admin/reset-full'),
+    onSuccess: () => {
+      setShowFullResetConfirm(false)
+      toast.success('Full reset complete. You will need to register again.')
+      localStorage.removeItem('token')
+      navigate('/login')
+      window.location.reload()
+    },
+    onError: (e) => toast.error(e.response?.data?.error || 'Reset failed')
+  })
+
   if (isLoading) {
     return (
       <Layout>
@@ -47,10 +77,80 @@ const AdminDashboard = () => {
               <p className="mt-2 text-gray-600">System overview and management</p>
             </div>
             <div className="flex items-center space-x-2">
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="flex items-center px-4 py-2 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-50"
+                title="Reset projects, teams. Keeps users and profiles."
+              >
+                <RotateCcw className="w-5 h-5 mr-2" />
+                Reset Projects
+              </button>
+              <button
+                onClick={() => setShowFullResetConfirm(true)}
+                className="flex items-center px-4 py-2 border border-red-300 text-red-700 rounded-lg hover:bg-red-50"
+                title="Remove all data. Fresh start."
+              >
+                <Trash2 className="w-5 h-5 mr-2" />
+                Full Reset
+              </button>
               <Settings className="w-6 h-6 text-gray-400" />
             </div>
           </div>
         </div>
+
+        {/* Full reset confirmation */}
+        {showFullResetConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-red-700 mb-2">Full System Reset?</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                This will delete ALL data: users, profiles, projects, teams, messages. The database will be empty. You will need to register again. Application structure is unchanged.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowFullResetConfirm(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => resetFullMutation.mutate()}
+                  disabled={resetFullMutation.isLoading}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50"
+                >
+                  {resetFullMutation.isLoading ? 'Resetting...' : 'Full Reset'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reset projects confirmation */}
+        {showResetConfirm && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg max-w-md w-full p-6 shadow-xl">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Reset Project Data?</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                This will remove all projects, teams, hackathons, and matching data. Users and profiles will be kept. Mentors can create new projects; students will see no joined teams.
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowResetConfirm(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => resetProjectsMutation.mutate()}
+                  disabled={resetProjectsMutation.isLoading}
+                  className="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50"
+                >
+                  {resetProjectsMutation.isLoading ? 'Resetting...' : 'Reset Projects'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

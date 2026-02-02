@@ -25,43 +25,46 @@ const AVAILABILITY_OPTIONS = [
 
 const DEPARTMENT_OPTIONS = ['CSE', 'CAD', 'CSM', 'CIV', 'EEE', 'ECE', 'MEC']
 
+const EMPTY_PROFILE_DATA = {
+  skills_description: '',
+  interests_description: '',
+  experience_description: '',
+  availability_description: '',
+  year_of_study: '',
+  department: '',
+  gpa: ''
+}
+
 const StudentDashboard = () => {
   const { user } = useAuth()
   const queryClient = useQueryClient()
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [rejectedProjects, setRejectedProjects] = useState(() => {
-    // Load rejected projects from localStorage
-    const stored = localStorage.getItem('rejectedProjects')
+    const key = user?.id ? `rejectedProjects_${user.id}` : 'rejectedProjects'
+    const stored = localStorage.getItem(key)
     return stored ? JSON.parse(stored) : []
   })
-  const [profileData, setProfileData] = useState({
-    skills_description: '',
-    interests_description: '',
-    experience_description: '',
-    availability_description: '',
-    year_of_study: '',
-    department: '',
-    gpa: ''
-  })
+  const [profileData, setProfileData] = useState(EMPTY_PROFILE_DATA)
 
-  // Fetch profile
+  // Fetch profile - key includes user id for cache isolation per user
   const { data: profile, isLoading: profileLoading } = useQuery({
-    queryKey: ['profile'],
+    queryKey: ['profile', user?.id],
     queryFn: async () => {
       const res = await api.get('/profiles')
       return res.data.profile
     },
-    retry: false
+    retry: false,
+    enabled: !!user?.id
   })
 
-  // Fetch recommendations
+  // Fetch recommendations - key includes user id for per-user cache
   const { data: recommendations, isLoading: recLoading } = useQuery({
-    queryKey: ['recommendations'],
+    queryKey: ['recommendations', user?.id],
     queryFn: async () => {
       const res = await api.get('/matching/recommendations')
       return res.data.recommendations || []
     },
-    enabled: !!profile
+    enabled: !!profile && !!user?.id
   })
 
   // Fetch teams
@@ -89,7 +92,8 @@ const StudentDashboard = () => {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['profile'])
+      queryClient.invalidateQueries({ queryKey: ['profile'] })
+      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
       setShowProfileModal(false)
       toast.success('Profile saved successfully!')
     },
@@ -111,6 +115,8 @@ const StudentDashboard = () => {
         department: profile.department || '',
         gpa: profile.gpa || ''
       })
+    } else {
+      setProfileData(EMPTY_PROFILE_DATA)
     }
   }, [profile])
 
@@ -134,7 +140,10 @@ const StudentDashboard = () => {
               <p className="mt-2 text-gray-600">Manage your profile and discover team opportunities</p>
             </div>
             <button
-              onClick={() => setShowProfileModal(true)}
+              onClick={() => {
+                if (!profile) setProfileData(EMPTY_PROFILE_DATA)
+                setShowProfileModal(true)
+              }}
               className="flex items-center px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
             >
               <User className="w-5 h-5 mr-2" />
@@ -338,7 +347,8 @@ const StudentDashboard = () => {
                     onReject={(projectId) => {
                       setRejectedProjects(prev => {
                         const updated = [...prev, projectId]
-                        localStorage.setItem('rejectedProjects', JSON.stringify(updated))
+                        const key = user?.id ? `rejectedProjects_${user.id}` : 'rejectedProjects'
+                        localStorage.setItem(key, JSON.stringify(updated))
                         return updated
                       })
                     }}
@@ -416,7 +426,7 @@ const ProjectCard = ({ recommendation, onReject }) => {
       
       toast.success('Successfully joined the project!')
       queryClient.invalidateQueries(['teams'])
-      queryClient.invalidateQueries(['recommendations'])
+      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
       // Remove from recommendations immediately
       if (onReject) {
         onReject(project.id)
