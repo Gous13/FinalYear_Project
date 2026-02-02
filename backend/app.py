@@ -47,6 +47,7 @@ def create_app(config_class=Config):
     from routes.teams import teams_bp
     from routes.matching import matching_bp
     from routes.admin import admin_bp
+    from routes.messages import messages_bp
     
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(users_bp, url_prefix='/api/users')
@@ -55,6 +56,7 @@ def create_app(config_class=Config):
     app.register_blueprint(teams_bp, url_prefix='/api/teams')
     app.register_blueprint(matching_bp, url_prefix='/api/matching')
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
+    app.register_blueprint(messages_bp, url_prefix='/api/messages')
     
     # Create tables
     with app.app_context():

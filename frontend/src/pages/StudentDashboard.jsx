@@ -3,11 +3,27 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
+import SkillsInput from '../components/SkillsInput'
 import toast from 'react-hot-toast'
 import { 
   User, Plus, Search, Sparkles, Users, Briefcase, 
   TrendingUp, Info, CheckCircle, XCircle 
 } from 'lucide-react'
+
+const AVAILABILITY_OPTIONS = [
+  { value: '', label: 'Select availability' },
+  { value: '5-10 hours per week', label: '5-10 hours per week' },
+  { value: '10-20 hours per week', label: '10-20 hours per week' },
+  { value: '30-40 hours per week', label: '30-40 hours per week' },
+  { value: '40-50 hours per week', label: '40-50 hours per week' },
+  { value: '50-60 hours per week', label: '50-60 hours per week' },
+  { value: '60-70 hours per week', label: '60-70 hours per week' },
+  { value: '70-80 hours per week', label: '70-80 hours per week' },
+  { value: '80-90 hours per week', label: '80-90 hours per week' },
+  { value: '90-100 hours per week', label: '90-100 hours per week' }
+]
+
+const DEPARTMENT_OPTIONS = ['CSE', 'CAD', 'CSM', 'CIV', 'EEE', 'ECE', 'MEC']
 
 const StudentDashboard = () => {
   const { user } = useAuth()
@@ -100,6 +116,10 @@ const StudentDashboard = () => {
 
   const handleProfileSubmit = (e) => {
     e.preventDefault()
+    if (!profileData.skills_description?.trim()) {
+      toast.error('Please add at least one skill')
+      return
+    }
     profileMutation.mutate(profileData)
   }
 
@@ -173,16 +193,14 @@ const StudentDashboard = () => {
               <form onSubmit={handleProfileSubmit} className="p-6 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Skills Description *
+                    Skills *
                   </label>
-                  <textarea
+                  <SkillsInput
                     value={profileData.skills_description}
-                    onChange={(e) => setProfileData({...profileData, skills_description: e.target.value})}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
-                    rows="3"
-                    placeholder="e.g., Python, React, Machine Learning, NLP, Web Development"
-                    required
+                    onChange={(val) => setProfileData({...profileData, skills_description: val})}
+                    placeholder="Type to search (e.g., sql, react, python)..."
                   />
+                  <p className="text-xs text-gray-500 mt-1">Type a skill to see related suggestions from all domains</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -212,13 +230,29 @@ const StudentDashboard = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Availability
                   </label>
-                  <textarea
+                  <select
                     value={profileData.availability_description}
                     onChange={(e) => setProfileData({...profileData, availability_description: e.target.value})}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
-                    rows="2"
-                    placeholder="e.g., Available 20 hours per week, flexible schedule"
-                  />
+                  >
+                    {(() => {
+                      const hasCustom = profileData.availability_description && !AVAILABILITY_OPTIONS.find(o => o.value === profileData.availability_description)
+                      return (
+                        <>
+                          {AVAILABILITY_OPTIONS.map((opt) => (
+                            <option key={opt.value || 'empty'} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                          {hasCustom && (
+                            <option value={profileData.availability_description}>
+                              Current: {profileData.availability_description}
+                            </option>
+                          )}
+                        </>
+                      )
+                    })()}
+                  </select>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
@@ -234,13 +268,19 @@ const StudentDashboard = () => {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
-                    <input
-                      type="text"
+                    <select
                       value={profileData.department}
                       onChange={(e) => setProfileData({...profileData, department: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="CSE, ECE, etc."
-                    />
+                    >
+                      <option value="">Select department</option>
+                      {DEPARTMENT_OPTIONS.map((dept) => (
+                        <option key={dept} value={dept}>{dept}</option>
+                      ))}
+                      {profileData.department && !DEPARTMENT_OPTIONS.includes(profileData.department) && (
+                        <option value={profileData.department}>{profileData.department}</option>
+                      )}
+                    </select>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">GPA</label>

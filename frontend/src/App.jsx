@@ -9,6 +9,7 @@ import StudentDashboard from './pages/StudentDashboard'
 import TeamWorkspace from './pages/TeamWorkspace'
 import MentorDashboard from './pages/MentorDashboard'
 import AdminDashboard from './pages/AdminDashboard'
+import Messages from './pages/Messages'
 
 const queryClient = new QueryClient()
 
@@ -49,6 +50,14 @@ function App() {
               element={
                 <PrivateRoute requiredRole="admin">
                   <AdminDashboard />
+                </PrivateRoute>
+              }
+            />
+            <Route
+              path="/messages"
+              element={
+                <PrivateRoute>
+                  <Messages />
                 </PrivateRoute>
               }
             />

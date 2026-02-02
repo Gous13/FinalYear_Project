@@ -8,6 +8,7 @@ from .project import Project, Hackathon
 from .team import Team, TeamMember
 from .matching import SimilarityScore, MatchExplanation
 from .analytics import SystemLog
+from .message import Message
 
 __all__ = [
     'User', 'Role',
@@ -15,5 +16,6 @@ __all__ = [
     'Project', 'Hackathon',
     'Team', 'TeamMember',
     'SimilarityScore', 'MatchExplanation',
-    'SystemLog'
+    'SystemLog',
+    'Message'
 ]
