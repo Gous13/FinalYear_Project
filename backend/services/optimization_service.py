@@ -38,49 +38,126 @@ class OptimizationService:
         max_size = constraints.get('max_team_size', project.max_team_size if hasattr(project, 'max_team_size') else 5)
         preferred_size = constraints.get('preferred_team_size', project.preferred_team_size if hasattr(project, 'preferred_team_size') else 4)
         
-        # Calculate number of teams needed
-        num_teams = (num_students + preferred_size - 1) // preferred_size  # Ceiling division
+        # Calculate an upper bound on number of teams (some may remain inactive).
+        # Using an upper bound avoids infeasibility when ceil-division would force
+        # too many teams each needing >= min_size.
+        num_teams = max(1, (num_students + preferred_size - 1) // preferred_size)  # Ceiling division
         
         # Create model
         model = cp_model.CpModel()
         
-        # Decision variables: x[i][t] = 1 if student i is assigned to team t
+        # Decision variables: x[i,t] = 1 if student i is assigned to team t
         x = {}
         for i in range(num_students):
             for t in range(num_teams):
                 x[i, t] = model.NewBoolVar(f'student_{i}_team_{t}')
         
+        # Team active indicator (allows some teams to be unused while keeping feasibility)
+        team_active = {}
+        for t in range(num_teams):
+            team_active[t] = model.NewBoolVar(f'team_active_{t}')
+
         # Constraints
         
         # 1. Each student assigned to exactly one team
         for i in range(num_students):
             model.Add(sum(x[i, t] for t in range(num_teams)) == 1)
         
-        # 2. Team size constraints
+        # 2. Team size constraints (only enforce min_size when team is active)
+        team_sizes = {}
         for t in range(num_teams):
             team_size = sum(x[i, t] for i in range(num_students))
-            model.Add(team_size >= min_size)
+            team_sizes[t] = team_size
+            # 0 <= team_size <= max_size always
             model.Add(team_size <= max_size)
+            # If active => team_size >= min_size, else team_size == 0
+            model.Add(team_size >= min_size).OnlyEnforceIf(team_active[t])
+            model.Add(team_size == 0).OnlyEnforceIf(team_active[t].Not())
+
+            # Link activity: if any student assigned then active must be 1
+            # (team_size >= 1 => active). We model with: team_size <= max_size * active and team_size >= active
+            model.Add(team_size <= max_size * team_active[t])
+            model.Add(team_size >= team_active[t])
         
-        # 3. Objective: Maximize total similarity score AND skill diversity
-        # Also minimize team size variance for balance
+        # 3. Objective: OR-Tools decides the final assignment.
+        # Similarity is a primary signal, but ties/near-ties are resolved by balancing:
+        # - skill coverage (from project required skills/description keywords)
+        # - workload balance (availability)
+        # - academic balance/diversity (year, GPA)
+        # - skill diversity (avoid near-duplicate skill sets within a team)
         objective_terms = []
         
-        # Extract skills for diversity calculation
+        # --- Helpers to extract/normalize fields used for balancing ---
         from services.nlp_service import get_nlp_service
         nlp = get_nlp_service()
+
+        def _parse_availability_hours(text: str) -> int:
+            """
+            Parse availability into an integer hours/week bucket.
+            Uses a conservative heuristic; returns 0 if unknown.
+            Examples:
+              "5-10 hours per week" -> 8
+              "Available 20 hours per week" -> 20
+            """
+            if not text:
+                return 0
+            import re
+            s = str(text).lower()
+            nums = [int(n) for n in re.findall(r'\d+', s)]
+            if not nums:
+                return 0
+            if len(nums) >= 2:
+                return int(round((nums[0] + nums[1]) / 2))
+            return int(nums[0])
+
+        def _gpa_to_int(gpa) -> int:
+            # Store GPA on a coarse 0-100 scale to keep CP-SAT integers.
+            try:
+                if gpa is None:
+                    return 0
+                return int(round(float(gpa) * 10))  # e.g. 8.45 -> 85
+            except Exception:
+                return 0
+
+        # Project "required skills" keywords for coverage scoring (top-N only)
+        project_text = f"{getattr(project, 'required_skills', '')} {getattr(project, 'description', '')}".strip()
+        required_keywords = nlp.extract_keywords(project_text, top_n=10) if project_text else []
+        required_keywords_set = set(required_keywords)
+
+        # Extract skills for diversity calculation and coverage
         profile_skills_dict = {}
+        profile_required_hits = {}  # i -> count of required keywords hit
+        availability_hours = {}
+        years = {}
+        gpas = {}
         for i, profile in enumerate(profiles):
-            profile_skills_dict[i] = set(nlp.extract_keywords(profile.skills_description or '', top_n=10))
+            skills = set(nlp.extract_keywords(profile.skills_description or '', top_n=10))
+            interests = set(nlp.extract_keywords(profile.interests_description or '', top_n=10))
+            experience = set(nlp.extract_keywords(profile.experience_description or '', top_n=10))
+            token_set = skills | interests | experience
+            profile_skills_dict[i] = skills
+            profile_required_hits[i] = len(token_set & required_keywords_set) if required_keywords_set else 0
+            availability_hours[i] = _parse_availability_hours(profile.availability_description or '')
+            years[i] = int(profile.year_of_study or 0)
+            gpas[i] = _gpa_to_int(profile.gpa)
         
-        # Maximize similarity
+        # --- Similarity component (still important, but not the only factor) ---
         for i in range(num_students):
             profile_id = profiles[i].id
             similarity = similarity_scores.get(profile_id, 0.5)
             for t in range(num_teams):
-                objective_terms.append(similarity * 100 * x[i, t])  # Weight similarity heavily
+                objective_terms.append(similarity * 100 * x[i, t])
+
+        # --- Skill coverage component (encourage covering project keywords) ---
+        # Reward assigning students who collectively cover more required keywords.
+        # Implement as a simple additive reward per student's keyword hits.
+        if required_keywords_set:
+            for t in range(num_teams):
+                for i in range(num_students):
+                    if profile_required_hits[i] > 0:
+                        objective_terms.append(profile_required_hits[i] * 6 * x[i, t])
         
-        # Maximize skill diversity within teams
+        # --- Skill diversity within teams ---
         # Penalize teams where students have very similar skills (>80% overlap)
         for t in range(num_teams):
             for i in range(num_students):
@@ -102,9 +179,7 @@ class OptimizationService:
                             # Penalty for low diversity
                             objective_terms.append(-30 * both_in_team)
         
-        # Minimize variance in team sizes (encourage balanced teams)
-        team_sizes = [sum(x[i, t] for i in range(num_students)) for t in range(num_teams)]
-        # Use sum of squared differences from preferred size
+        # --- Balance team sizes around preferred_size ---
         for t in range(num_teams):
             # OR-Tools CP-SAT does not support calling abs() directly on a
             # linear expression in constraints. We model the absolute
@@ -117,6 +192,32 @@ class OptimizationService:
             model.AddAbsEquality(diff, diff_raw)
             # Penalty for deviation (negative because we maximize the objective)
             objective_terms.append(-diff * 10)
+
+        # --- Availability / Year / GPA balancing & diversity ---
+        # We encourage teams to have balanced workload (availability) and avoid extreme homogeneity in year/GPA.
+        # Implemented as pairwise penalties for being too similar (year) and for pairing very low-availability
+        # with other low-availability students, plus soft penalties for GPA clustering.
+        for t in range(num_teams):
+            for i in range(num_students):
+                for j in range(i + 1, num_students):
+                    both_in_team = model.NewBoolVar(f'pair_{i}_{j}_team_{t}')
+                    model.Add(both_in_team <= x[i, t])
+                    model.Add(both_in_team <= x[j, t])
+                    model.Add(both_in_team >= x[i, t] + x[j, t] - 1)
+
+                    # Year diversity: penalize same-year pairings (soft)
+                    if years[i] and years[j] and years[i] == years[j]:
+                        objective_terms.append(-8 * both_in_team)
+
+                    # Workload balance: penalize pairing two low-availability students (soft)
+                    if availability_hours[i] and availability_hours[j]:
+                        if availability_hours[i] <= 10 and availability_hours[j] <= 10:
+                            objective_terms.append(-10 * both_in_team)
+
+                    # GPA diversity/balance: penalize pairing very similar GPAs (soft)
+                    if gpas[i] and gpas[j]:
+                        if abs(gpas[i] - gpas[j]) <= 5:  # within ~0.5 GPA
+                            objective_terms.append(-4 * both_in_team)
         
         # Maximize objective
         model.Maximize(sum(objective_terms))
@@ -139,8 +240,9 @@ class OptimizationService:
             teams = [team for team in teams if len(team) > 0]
             return teams
         else:
-            # Fallback: Simple greedy assignment
-            return self._greedy_team_formation(profiles, project, similarity_scores, constraints)
+            # Strict: do not fallback to greedy/similarity ranking. If CP-SAT cannot find a solution,
+            # return an empty assignment to avoid violating the "optimization selects final team" rule.
+            return []
     
     def _greedy_team_formation(self, profiles, project, similarity_scores, constraints):
         """

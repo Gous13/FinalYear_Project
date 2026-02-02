@@ -59,6 +59,14 @@ const Messages = () => {
     }
   }, [threadData, selectedUserId, queryClient])
 
+  useEffect(() => {
+    if (groupChatData && selectedGroupChatId) {
+      // Opening a group chat marks it read on the backend, so refresh counts
+      queryClient.invalidateQueries(['messages-unread'])
+      queryClient.invalidateQueries(['messages-conversations'])
+    }
+  }, [groupChatData, selectedGroupChatId, queryClient])
+
   const [debouncedEmail, setDebouncedEmail] = useState('')
   useEffect(() => {
     const t = setTimeout(() => setDebouncedEmail(emailSearch), 300)
@@ -269,7 +277,7 @@ const Messages = () => {
                       <div className="flex items-center justify-between gap-2">
                         {isGroup && <Users className="w-4 h-4 shrink-0 text-primary-600" />}
                         <span className="font-medium text-gray-900 truncate">{displayName}</span>
-                        {!isGroup && conv.unread_count > 0 && (
+                        {conv.unread_count > 0 && (
                           <span className="flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-red-500 px-1.5 text-xs font-bold text-white">
                             {conv.unread_count}
                           </span>

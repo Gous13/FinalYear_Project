@@ -68,15 +68,15 @@ def create_profile():
             gpa=gpa
         )
         
-        # Generate embeddings
-        full_description = profile.get_full_description()
-        embedding = nlp_service.encode_text(full_description)
-        
-        # Store embeddings (as JSON strings)
+        # Generate embeddings (ONLY skills/interests/experience; availability is NOT embedded)
         import json
-        profile.skills_embedding = json.dumps(embedding.tolist())
-        profile.interests_embedding = json.dumps(embedding.tolist())
-        profile.experience_embedding = json.dumps(embedding.tolist())
+        skills_emb = nlp_service.encode_text(profile.skills_description or '')
+        interests_emb = nlp_service.encode_text(profile.interests_description or '')
+        experience_emb = nlp_service.encode_text(profile.experience_description or '')
+
+        profile.skills_embedding = json.dumps(skills_emb.tolist())
+        profile.interests_embedding = json.dumps(interests_emb.tolist())
+        profile.experience_embedding = json.dumps(experience_emb.tolist())
         profile.is_complete = True
         
         db.session.add(profile)
@@ -155,14 +155,15 @@ def update_profile():
             except (ValueError, TypeError):
                 profile.gpa = None
         
-        # Regenerate embeddings if text changed
-        full_description = profile.get_full_description()
-        embedding = nlp_service.encode_text(full_description)
-        
+        # Regenerate embeddings (ONLY skills/interests/experience; availability is NOT embedded)
         import json
-        profile.skills_embedding = json.dumps(embedding.tolist())
-        profile.interests_embedding = json.dumps(embedding.tolist())
-        profile.experience_embedding = json.dumps(embedding.tolist())
+        skills_emb = nlp_service.encode_text(profile.skills_description or '')
+        interests_emb = nlp_service.encode_text(profile.interests_description or '')
+        experience_emb = nlp_service.encode_text(profile.experience_description or '')
+
+        profile.skills_embedding = json.dumps(skills_emb.tolist())
+        profile.interests_embedding = json.dumps(interests_emb.tolist())
+        profile.experience_embedding = json.dumps(experience_emb.tolist())
         
         db.session.commit()
         

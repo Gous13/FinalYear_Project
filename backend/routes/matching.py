@@ -21,6 +21,44 @@ nlp_service = get_nlp_service()
 optimization_service = OptimizationService()
 explanation_service = ExplanationService()
 
+def _compute_profile_project_similarity(project_embedding, profile):
+    """
+    Compute semantic similarity using ONLY:
+    - skills_description
+    - interests_description
+    - experience_description
+    Uses embeddings + cosine similarity, and returns:
+      (overall, skills_sim, interests_sim, experience_sim)
+    """
+    # Ensure per-field embeddings exist (do not embed availability/year/gpa)
+    skills_emb = json.loads(profile.skills_embedding) if profile.skills_embedding else None
+    interests_emb = json.loads(profile.interests_embedding) if profile.interests_embedding else None
+    experience_emb = json.loads(profile.experience_embedding) if profile.experience_embedding else None
+
+    # Lazily compute missing embeddings
+    if skills_emb is None:
+        skills_emb = nlp_service.encode_text(profile.skills_description or '').tolist()
+        profile.skills_embedding = json.dumps(skills_emb)
+    if interests_emb is None:
+        interests_emb = nlp_service.encode_text(profile.interests_description or '').tolist()
+        profile.interests_embedding = json.dumps(interests_emb)
+    if experience_emb is None:
+        experience_emb = nlp_service.encode_text(profile.experience_description or '').tolist()
+        profile.experience_embedding = json.dumps(experience_emb)
+
+    skills_sim = nlp_service.compute_similarity(project_embedding, skills_emb)
+    interests_sim = nlp_service.compute_similarity(project_embedding, interests_emb) if (profile.interests_description or '').strip() else None
+    experience_sim = nlp_service.compute_similarity(project_embedding, experience_emb) if (profile.experience_description or '').strip() else None
+
+    sims = [skills_sim]
+    if interests_sim is not None:
+        sims.append(interests_sim)
+    if experience_sim is not None:
+        sims.append(experience_sim)
+    overall = float(sum(sims) / max(len(sims), 1))
+
+    return overall, skills_sim, interests_sim, experience_sim
+
 def _auto_form_teams_for_project(project_id):
     """
     Helper function to automatically form teams for a project when enough students have joined.
@@ -68,7 +106,7 @@ def _auto_form_teams_for_project(project_id):
         if len(joined_profiles) < project.min_team_size:
             return False, 0, f'Not enough profiles ({len(joined_profiles)}/{project.min_team_size})'
         
-        # Get similarity scores for these profiles
+        # Get similarity scores for these profiles (skills/interests/experience ONLY)
         similarity_scores = {}
         for profile in joined_profiles:
             similarity = SimilarityScore.query.filter_by(
@@ -85,21 +123,20 @@ def _auto_form_teams_for_project(project_id):
                     project_text = f"{project.description} {project.required_skills}"
                     project_embedding = nlp_service.encode_text(project_text).tolist()
                     project.description_embedding = json.dumps(project_embedding)
-                
-                profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
-                if not profile_embedding:
-                    full_description = profile.get_full_description()
-                    profile_embedding = nlp_service.encode_text(full_description).tolist()
-                    profile.skills_embedding = json.dumps(profile_embedding)
-                
-                overall_sim = nlp_service.compute_similarity(project_embedding, profile_embedding)
+
+                overall_sim, skills_sim, interests_sim, experience_sim = _compute_profile_project_similarity(project_embedding, profile)
                 similarity_scores[profile.id] = overall_sim
-        
-        # Delete existing ad-hoc teams for this project (we'll recreate them optimally)
-        existing_teams = Team.query.filter_by(project_id=project_id).all()
-        for team in existing_teams:
-            db.session.delete(team)
-        db.session.flush()
+
+                # Store for reuse (no schema change; uses existing columns)
+                s = SimilarityScore(
+                    profile_id=profile.id,
+                    project_id=project_id,
+                    overall_similarity=overall_sim,
+                    skills_similarity=skills_sim,
+                    interests_similarity=interests_sim,
+                    experience_similarity=experience_sim
+                )
+                db.session.add(s)
         
         # Form teams using optimization (only for joined students)
         constraints = {
@@ -110,6 +147,19 @@ def _auto_form_teams_for_project(project_id):
         team_assignments = optimization_service.form_teams(
             joined_profiles, project, similarity_scores, constraints
         )
+
+        # IMPORTANT: Never delete existing teams unless optimizer produced a valid assignment.
+        # This preserves the student->team mapping used by "My Teams" even if optimization
+        # cannot currently find a feasible solution (e.g., constraints too tight).
+        if not team_assignments or not any(team_assignments):
+            db.session.rollback()
+            return False, 0, 'Optimization could not form teams yet; keeping current team memberships'
+
+        # Delete existing ad-hoc teams for this project (we'll recreate them optimally)
+        existing_teams = Team.query.filter_by(project_id=project_id).all()
+        for team in existing_teams:
+            db.session.delete(team)
+        db.session.flush()
         
         # Create optimized teams in database
         team_ids = []
@@ -139,6 +189,11 @@ def _auto_form_teams_for_project(project_id):
                     )
                     db.session.add(member)
         
+        # If for any reason no teams were created, do not wipe memberships.
+        if len(team_ids) == 0:
+            db.session.rollback()
+            return False, 0, 'Optimization produced no teams; keeping current team memberships'
+
         project.status = 'team_forming'
         db.session.commit()
 
@@ -183,16 +238,7 @@ def compute_similarities(project_id):
         similarity_results = []
         
         for profile in profiles:
-            # Get or compute profile embedding
-            profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
-            if not profile_embedding:
-                full_description = profile.get_full_description()
-                profile_embedding = nlp_service.encode_text(full_description).tolist()
-                profile.skills_embedding = json.dumps(profile_embedding)
-                db.session.commit()
-            
-            # Compute similarity
-            overall_sim = nlp_service.compute_similarity(project_embedding, profile_embedding)
+            overall_sim, skills_sim, interests_sim, experience_sim = _compute_profile_project_similarity(project_embedding, profile)
             
             # Store similarity score
             similarity = SimilarityScore.query.filter_by(
@@ -202,11 +248,17 @@ def compute_similarities(project_id):
             
             if similarity:
                 similarity.overall_similarity = overall_sim
+                similarity.skills_similarity = skills_sim
+                similarity.interests_similarity = interests_sim
+                similarity.experience_similarity = experience_sim
             else:
                 similarity = SimilarityScore(
                     profile_id=profile.id,
                     project_id=project_id,
-                    overall_similarity=overall_sim
+                    overall_similarity=overall_sim,
+                    skills_similarity=skills_sim,
+                    interests_similarity=interests_sim,
+                    experience_similarity=experience_sim
                 )
                 db.session.add(similarity)
             
@@ -217,7 +269,7 @@ def compute_similarities(project_id):
                 'similarity': overall_sim,
                 'profile': profile.to_dict()
             })
-        
+
         db.session.commit()
         
         # Sort by similarity

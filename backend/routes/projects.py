@@ -60,14 +60,35 @@ def create_project():
             profiles = StudentProfile.query.all()
             project_embedding = json.loads(project.description_embedding)
             
+            def _compute_profile_project_similarity_local(project_embedding_local, profile_obj):
+                skills_emb = json.loads(profile_obj.skills_embedding) if profile_obj.skills_embedding else None
+                interests_emb = json.loads(profile_obj.interests_embedding) if profile_obj.interests_embedding else None
+                experience_emb = json.loads(profile_obj.experience_embedding) if profile_obj.experience_embedding else None
+
+                if skills_emb is None:
+                    skills_emb = get_nlp_service().encode_text(profile_obj.skills_description or '').tolist()
+                    profile_obj.skills_embedding = json.dumps(skills_emb)
+                if interests_emb is None:
+                    interests_emb = get_nlp_service().encode_text(profile_obj.interests_description or '').tolist()
+                    profile_obj.interests_embedding = json.dumps(interests_emb)
+                if experience_emb is None:
+                    experience_emb = get_nlp_service().encode_text(profile_obj.experience_description or '').tolist()
+                    profile_obj.experience_embedding = json.dumps(experience_emb)
+
+                skills_sim = get_nlp_service().compute_similarity(project_embedding_local, skills_emb)
+                interests_sim = get_nlp_service().compute_similarity(project_embedding_local, interests_emb) if (profile_obj.interests_description or '').strip() else None
+                experience_sim = get_nlp_service().compute_similarity(project_embedding_local, experience_emb) if (profile_obj.experience_description or '').strip() else None
+
+                sims = [skills_sim]
+                if interests_sim is not None:
+                    sims.append(interests_sim)
+                if experience_sim is not None:
+                    sims.append(experience_sim)
+                overall = float(sum(sims) / max(len(sims), 1))
+                return overall, skills_sim, interests_sim, experience_sim
+
             for profile in profiles:
-                profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
-                if not profile_embedding:
-                    full_description = profile.get_full_description()
-                    profile_embedding = get_nlp_service().encode_text(full_description).tolist()
-                    profile.skills_embedding = json.dumps(profile_embedding)
-                
-                overall_sim = get_nlp_service().compute_similarity(project_embedding, profile_embedding)
+                overall_sim, skills_sim, interests_sim, experience_sim = _compute_profile_project_similarity_local(project_embedding, profile)
                 
                 similarity = SimilarityScore.query.filter_by(
                     profile_id=profile.id,
@@ -76,11 +97,17 @@ def create_project():
                 
                 if similarity:
                     similarity.overall_similarity = overall_sim
+                    similarity.skills_similarity = skills_sim
+                    similarity.interests_similarity = interests_sim
+                    similarity.experience_similarity = experience_sim
                 else:
                     similarity = SimilarityScore(
                         profile_id=profile.id,
                         project_id=project.id,
-                        overall_similarity=overall_sim
+                        overall_similarity=overall_sim,
+                        skills_similarity=skills_sim,
+                        interests_similarity=interests_sim,
+                        experience_similarity=experience_sim
                     )
                     db.session.add(similarity)
             

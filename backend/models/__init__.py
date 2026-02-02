@@ -10,6 +10,7 @@ from .matching import SimilarityScore, MatchExplanation
 from .analytics import SystemLog
 from .message import Message
 from .group_chat import GroupChat, GroupChatMember, GroupMessage
+from .group_chat_read_state import GroupChatReadState
 
 __all__ = [
     'User', 'Role',
@@ -19,5 +20,6 @@ __all__ = [
     'SimilarityScore', 'MatchExplanation',
     'SystemLog',
     'Message',
-    'GroupChat', 'GroupChatMember', 'GroupMessage'
+    'GroupChat', 'GroupChatMember', 'GroupMessage',
+    'GroupChatReadState'
 ]

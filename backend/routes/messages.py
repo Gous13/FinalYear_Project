@@ -9,6 +9,7 @@ from extensions import db
 from models.user import User
 from models.message import Message
 from models.group_chat import GroupChat, GroupChatMember, GroupMessage
+from models.group_chat_read_state import GroupChatReadState
 from datetime import datetime
 
 messages_bp = Blueprint('messages', __name__)
@@ -83,11 +84,19 @@ def get_conversations():
             if not gc or not gc.project:
                 continue
             last_msg = GroupMessage.query.filter_by(group_chat_id=gc.id).order_by(GroupMessage.created_at.desc()).first()
+            # Unread count: messages after last_read_message_id, excluding my own messages
+            rs = GroupChatReadState.query.filter_by(group_chat_id=gc.id, user_id=current_user_id).first()
+            last_read_id = rs.last_read_message_id if rs else 0
+            unread_group = GroupMessage.query.filter(
+                GroupMessage.group_chat_id == gc.id,
+                GroupMessage.id > last_read_id,
+                GroupMessage.sender_id != current_user_id
+            ).count()
             conversations.append({
                 'type': 'group',
                 'group_chat': gc.to_dict(include_project=True),
                 'last_message': last_msg.to_dict(include_sender=True) if last_msg else None,
-                'unread_count': 0,  # Group chats don't track per-user read
+                'unread_count': unread_group,
                 'last_at': last_msg.created_at.isoformat() if last_msg and last_msg.created_at else gc.created_at.isoformat() if gc.created_at else None
             })
 
@@ -205,12 +214,28 @@ def get_unread_count():
     """Get count of unread messages for current user"""
     try:
         current_user_id = int(get_jwt_identity())
-        count = Message.query.filter(
+        direct_count = Message.query.filter(
             Message.receiver_id == current_user_id,
             Message.deleted_by_receiver_at == None,
             Message.is_read == False
         ).count()
-        return jsonify({'unread_count': count}), 200
+
+        # Group unread count across all group chats where user is a member
+        group_count = 0
+        memberships = GroupChatMember.query.filter_by(user_id=current_user_id).all()
+        for m in memberships:
+            gc = m.group_chat
+            if not gc:
+                continue
+            rs = GroupChatReadState.query.filter_by(group_chat_id=gc.id, user_id=current_user_id).first()
+            last_read_id = rs.last_read_message_id if rs else 0
+            group_count += GroupMessage.query.filter(
+                GroupMessage.group_chat_id == gc.id,
+                GroupMessage.id > last_read_id,
+                GroupMessage.sender_id != current_user_id
+            ).count()
+
+        return jsonify({'unread_count': direct_count + group_count}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -232,6 +257,17 @@ def get_group_chat(group_chat_id):
             return jsonify({'error': 'You are not a member of this group chat'}), 403
 
         messages = GroupMessage.query.filter_by(group_chat_id=group_chat_id).order_by(GroupMessage.created_at.asc()).all()
+
+        # Mark group chat as read for this user (set last_read_message_id)
+        last_id = messages[-1].id if messages else 0
+        rs = GroupChatReadState.query.filter_by(group_chat_id=group_chat_id, user_id=current_user_id).first()
+        if rs:
+            rs.last_read_message_id = max(rs.last_read_message_id or 0, last_id)
+        else:
+            rs = GroupChatReadState(group_chat_id=group_chat_id, user_id=current_user_id, last_read_message_id=last_id)
+            db.session.add(rs)
+        db.session.commit()
+
         return jsonify({
             'group_chat': gc.to_dict(include_members=True, include_project=True),
             'messages': [m.to_dict(include_sender=True) for m in messages]
