@@ -7,10 +7,23 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
 from models.profile import StudentProfile
+from models.student_skill import StudentSkill
 from services.nlp_service import get_nlp_service
 
 profiles_bp = Blueprint('profiles', __name__)
 nlp_service = get_nlp_service()
+
+
+def _sync_skills_to_student_skills(user_id, skills_description):
+    """Sync comma-separated skills to student_skills table (unverified if new)"""
+    if not skills_description or not skills_description.strip():
+        return
+    skills = [s.strip() for s in skills_description.split(',') if s.strip()]
+    for name in skills:
+        existing = StudentSkill.query.filter_by(user_id=user_id, skill_name=name).first()
+        if not existing:
+            sk = StudentSkill(user_id=user_id, skill_name=name, status='unverified')
+            db.session.add(sk)
 
 @profiles_bp.route('', methods=['POST'])
 @jwt_required()
@@ -80,8 +93,10 @@ def create_profile():
         profile.is_complete = True
         
         db.session.add(profile)
+        db.session.flush()
+        _sync_skills_to_student_skills(user_id, profile.skills_description)
         db.session.commit()
-        
+
         return jsonify({
             'message': 'Profile created successfully',
             'profile': profile.to_dict()
@@ -164,9 +179,11 @@ def update_profile():
         profile.skills_embedding = json.dumps(skills_emb.tolist())
         profile.interests_embedding = json.dumps(interests_emb.tolist())
         profile.experience_embedding = json.dumps(experience_emb.tolist())
-        
+
+        if 'skills_description' in data:
+            _sync_skills_to_student_skills(user_id, profile.skills_description)
         db.session.commit()
-        
+
         return jsonify({
             'message': 'Profile updated successfully',
             'profile': profile.to_dict()

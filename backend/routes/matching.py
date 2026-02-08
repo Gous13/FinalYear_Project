@@ -10,6 +10,7 @@ from models.profile import StudentProfile
 from models.project import Project, Hackathon
 from models.team import Team, TeamMember
 from models.matching import SimilarityScore, MatchExplanation
+from models.student_skill import StudentSkill
 from services.nlp_service import get_nlp_service
 from services.optimization_service import OptimizationService
 from services.explanation_service import ExplanationService
@@ -504,22 +505,36 @@ def get_recommendations():
                 pass
         
         recommendations = []
-        
-        # Extract student skills for matching
+
+        # Get verified skills - only these count for recommendations (backward compat: fallback to profile)
+        verified_skills = StudentSkill.query.filter_by(user_id=user_id, status='verified').all()
+        if verified_skills:
+            student_skill_names = {s.skill_name.lower().strip() for s in verified_skills}
+        else:
+            student_skill_names = set()
+
         from services.nlp_service import get_nlp_service
         nlp = get_nlp_service()
-        student_skills = nlp.extract_keywords(profile.skills_description or '', top_n=15)
-        
+        # Fallback: if no verified skills, use profile keywords (backward compat)
+        profile_keywords = set(nlp.extract_keywords(profile.skills_description or '', top_n=15))
+        student_skills_for_overlap = student_skill_names if student_skill_names else profile_keywords
+
         for project in projects:
             # Skip projects user has already joined
             if project.id in joined_project_ids:
                 continue
             
             # Extract project required skills
-            project_skills = nlp.extract_keywords(project.required_skills or project.description or '', top_n=15)
-            
-            # Check skill overlap - must have at least some matching skills
-            skill_overlap = set(student_skills) & set(project_skills)
+            project_skills = set(nlp.extract_keywords(project.required_skills or project.description or '', top_n=15))
+            project_skills_lower = {s.lower() for s in project_skills}
+
+            # Check skill overlap - use verified skills (or profile fallback)
+            skill_overlap = set()
+            for sk in student_skills_for_overlap:
+                sk_str = sk.lower() if isinstance(sk, str) else str(sk).lower()
+                tokens = sk_str.replace('-', ' ').split()
+                if any(t in project_skills_lower or any(t in p or p in t for p in project_skills_lower) for t in tokens):
+                    skill_overlap.add(sk)
             if not skill_overlap and project.required_skills:
                 # No skill overlap, skip this project
                 continue

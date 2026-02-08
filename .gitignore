@@ -55,3 +55,6 @@ frontend/.vite/
 # Database
 *.db-journal
 synapselink.db
+
+# Uploads
+backend/uploads/

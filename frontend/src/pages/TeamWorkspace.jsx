@@ -4,7 +4,10 @@ import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
-import { Users, MessageSquare, FileText, Calendar, User, MessageCircle } from 'lucide-react'
+import { Users, MessageSquare, FileText, Calendar, User, MessageCircle, Shield } from 'lucide-react'
+import TeamSkillValidation from '../components/TeamSkillValidation'
+import TaskBoard from '../components/TaskBoard'
+import FileUploadPanel from '../components/FileUploadPanel'
 
 const TeamWorkspace = () => {
   const { teamId } = useParams()
@@ -73,6 +76,17 @@ const TeamWorkspace = () => {
               <MessageCircle className="w-5 h-5" />
               Open Group Chat
             </button>
+          </div>
+        )}
+
+        {/* Team Skill Validation */}
+        {team.project_id && (
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+              <Shield className="w-5 h-5 mr-2 text-primary-600" />
+              Skill Validation
+            </h2>
+            <TeamSkillValidation teamId={team.id} />
           </div>
         )}
 
@@ -157,17 +171,30 @@ const TeamWorkspace = () => {
           </div>
         </div>
 
-        {/* Collaboration Space */}
+        {/* File Upload */}
+        <div className="bg-white rounded-lg shadow-sm p-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+            <FileText className="w-5 h-5 mr-2 text-primary-600" />
+            Shared Files
+          </h2>
+          <FileUploadPanel
+            teamId={team.id}
+            isMentor={user?.id === team.project_creator_id}
+            userId={user?.id}
+          />
+        </div>
+
+        {/* Task Board */}
         <div className="bg-white rounded-lg shadow-sm p-6">
           <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
             <MessageSquare className="w-5 h-5 mr-2 text-primary-600" />
-            Collaboration Space
+            Tasks
           </h2>
-          <div className="border border-gray-200 rounded-lg p-4 min-h-[200px]">
-            <p className="text-gray-500 text-center py-8">
-              Collaboration features coming soon. Use this space for team discussions and file sharing.
-            </p>
-          </div>
+          <TaskBoard
+            teamId={team.id}
+            teamMembers={team.members || []}
+            isMentor={user?.id === team.project_creator_id}
+          />
         </div>
       </div>
     </Layout>

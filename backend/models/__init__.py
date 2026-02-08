@@ -11,6 +11,10 @@ from .analytics import SystemLog
 from .message import Message
 from .group_chat import GroupChat, GroupChatMember, GroupMessage
 from .group_chat_read_state import GroupChatReadState
+from .student_skill import StudentSkill
+from .skill_assessment import SkillAssessment, SkillAssessmentResult
+from .project_task import ProjectTask
+from .team_file import TeamFile
 
 __all__ = [
     'User', 'Role',
@@ -21,5 +25,7 @@ __all__ = [
     'SystemLog',
     'Message',
     'GroupChat', 'GroupChatMember', 'GroupMessage',
-    'GroupChatReadState'
+    'GroupChatReadState',
+    'StudentSkill', 'SkillAssessment', 'SkillAssessmentResult',
+    'ProjectTask', 'TeamFile'
 ]

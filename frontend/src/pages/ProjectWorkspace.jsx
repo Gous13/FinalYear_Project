@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
-import { Users, MessageCircle, User, ArrowLeft } from 'lucide-react'
+import { Users, MessageCircle, User, ArrowLeft, Shield, CheckSquare } from 'lucide-react'
 
 const ProjectWorkspace = () => {
   const { projectId } = useParams()
@@ -23,6 +23,24 @@ const ProjectWorkspace = () => {
     queryFn: async () => {
       const res = await api.get(`/projects/projects/${projectId}/members`)
       return res.data
+    },
+    enabled: !!projectId
+  })
+
+  const { data: tasksSummary } = useQuery({
+    queryKey: ['tasks-summary', projectId],
+    queryFn: async () => {
+      const res = await api.get(`/projects/projects/${projectId}/tasks-summary`)
+      return res.data
+    },
+    enabled: !!projectId
+  })
+
+  const { data: teamsValidation } = useQuery({
+    queryKey: ['teams-validation', projectId],
+    queryFn: async () => {
+      const res = await api.get(`/projects/projects/${projectId}/teams-validation`)
+      return res.data.teams_validation || []
     },
     enabled: !!projectId
   })
@@ -86,6 +104,78 @@ const ProjectWorkspace = () => {
               <MessageCircle className="w-5 h-5" />
               Open Group Chat
             </button>
+          </div>
+        )}
+
+        {/* Teams - Links to team workspaces */}
+        {projectData.teams && projectData.teams.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">Teams</h2>
+            <div className="space-y-2">
+              {projectData.teams.map((t) => (
+                <div key={t.id} className="flex items-center justify-between p-3 border border-gray-200 rounded-lg">
+                  <span className="font-medium text-gray-900">{t.name}</span>
+                  <button
+                    onClick={() => navigate(`/team/${t.id}`)}
+                    className="px-3 py-1.5 text-sm bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+                  >
+                    Open Team Workspace
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Project Progress */}
+        {tasksSummary && (
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+              <CheckSquare className="w-5 h-5 mr-2 text-primary-600" />
+              Project Progress
+            </h2>
+            <div className="flex items-center gap-6">
+              <div>
+                <span className="text-3xl font-bold text-primary-600">{tasksSummary.completion_percentage || 0}%</span>
+                <p className="text-sm text-gray-600">Complete</p>
+              </div>
+              <div>
+                <span className="text-lg font-medium text-gray-900">{tasksSummary.completed_tasks || 0}/{tasksSummary.total_tasks || 0}</span>
+                <p className="text-sm text-gray-600">Tasks completed</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Team Skill Validation */}
+        {teamsValidation && teamsValidation.length > 0 && (
+          <div className="bg-white rounded-lg shadow-sm p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4 flex items-center">
+              <Shield className="w-5 h-5 mr-2 text-primary-600" />
+              Team Skill Validation
+            </h2>
+            <div className="space-y-4">
+              {teamsValidation.map((tv) => (
+                <div
+                  key={tv.team_id}
+                  className={`rounded-lg p-4 border ${
+                    (tv.confidence_score || 0) < 1 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'
+                  }`}
+                >
+                  <div className="font-medium text-gray-900">{tv.team_name || `Team ${tv.team_id}`}</div>
+                  <div className="text-sm text-gray-600 mt-1">
+                    Confidence: {((tv.confidence_score || 0) * 100).toFixed(0)}%
+                  </div>
+                  {tv.warnings?.length > 0 && (
+                    <ul className="text-sm text-amber-700 list-disc list-inside mt-2">
+                      {tv.warnings.map((w, i) => (
+                        <li key={i}>{w}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

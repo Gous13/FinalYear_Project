@@ -35,6 +35,7 @@ class Team(db.Model):
             'hackathon_id': self.hackathon_id,
             'project_title': self.project.title if self.project else None,
             'hackathon_title': self.hackathon.title if self.hackathon else None,
+            'project_creator_id': self.project.creator_id if self.project else None,
             'status': self.status,
             'is_locked': self.is_locked,
             'description': self.description,

@@ -7,6 +7,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
 from models.project import Project, Hackathon
+from models.project_task import ProjectTask
 from services.nlp_service import get_nlp_service
 from utils.decorators import mentor_or_admin_required
 from datetime import datetime
@@ -198,6 +199,58 @@ def get_project_members(project_id):
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@projects_bp.route('/projects/<int:project_id>/tasks-summary', methods=['GET'])
+@jwt_required()
+@mentor_or_admin_required
+def get_project_tasks_summary(project_id):
+    """Get project-level task summary (completion %, per-member counts)"""
+    try:
+        from models.team import Team
+        from models.project import ProjectTask
+        project = Project.query.get(project_id)
+        if not project:
+            return jsonify({'error': 'Project not found'}), 404
+        teams = Team.query.filter_by(project_id=project_id).all()
+        all_tasks = []
+        for t in teams:
+            for task in ProjectTask.query.filter_by(team_id=t.id).all():
+                d = task.to_dict()
+                d['team_name'] = t.name
+                all_tasks.append(d)
+        total = len(all_tasks)
+        completed = sum(1 for t in all_tasks if t.get('status') == 'completed')
+        completion_pct = (completed / total * 100) if total > 0 else 0
+        member_counts = {}
+        for t in all_tasks:
+            if t.get('assignee_id') and t.get('status') == 'completed':
+                aid = t['assignee_id']
+                member_counts[aid] = member_counts.get(aid, 0) + 1
+        return jsonify({
+            'project_id': project_id,
+            'total_tasks': total,
+            'completed_tasks': completed,
+            'completion_percentage': round(completion_pct, 1),
+            'per_member_completed': member_counts,
+            'tasks_by_team': [{'team_id': t.id, 'team_name': t.name, 'tasks': [x.to_dict() for x in ProjectTask.query.filter_by(team_id=t.id).all()]} for t in teams]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@projects_bp.route('/projects/<int:project_id>/teams-validation', methods=['GET'])
+@jwt_required()
+@mentor_or_admin_required
+def get_project_teams_validation(project_id):
+    """Get skill validation for all teams in project"""
+    try:
+        from services.team_validation_service import validate_project_teams
+        results = validate_project_teams(project_id)
+        return jsonify({'teams_validation': results}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @projects_bp.route('/hackathons', methods=['POST'])
 @jwt_required()

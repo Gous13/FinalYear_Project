@@ -28,7 +28,12 @@
    python init_db.py
    ```
 
-5. Run the backend:
+5. Seed skill assessments (for MCQ verification):
+   ```bash
+   python seed_assessments.py
+   ```
+
+6. Run the backend:
    ```bash
    python app.py
    ```

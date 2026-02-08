@@ -8,6 +8,9 @@ from extensions import db
 from models.user import User
 from models.team import Team, TeamMember
 from models.project import Project, Hackathon
+from models.project_task import ProjectTask
+from utils.decorators import mentor_or_admin_required
+from datetime import datetime
 
 teams_bp = Blueprint('teams', __name__)
 
@@ -308,6 +311,132 @@ def add_member(team_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+@teams_bp.route('/<int:team_id>/skill-validation', methods=['GET'])
+@jwt_required()
+def get_team_skill_validation(team_id):
+    """Get team skill confidence and coverage (team members, mentor, admin)"""
+    try:
+        user_id = int(get_jwt_identity())
+        team = Team.query.get(team_id)
+        if not team:
+            return jsonify({'error': 'Team not found'}), 404
+
+        user = User.query.get(user_id)
+        is_member = any(m.user_id == user_id for m in (team.members or []))
+        is_mentor = team.project and team.project.creator_id == user_id
+        is_admin = user.role and user.role.name == 'admin'
+
+        if not (is_member or is_mentor or is_admin):
+            return jsonify({'error': 'Unauthorized'}), 403
+
+        from services.team_validation_service import validate_team_skills
+        result = validate_team_skills(team_id)
+        if 'error' in result:
+            return jsonify({'error': result['error']}), 404
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@teams_bp.route('/<int:team_id>/tasks', methods=['GET'])
+@jwt_required()
+def get_team_tasks(team_id):
+    """List tasks for a team"""
+    try:
+        user_id = int(get_jwt_identity())
+        team = Team.query.get(team_id)
+        if not team:
+            return jsonify({'error': 'Team not found'}), 404
+        user = User.query.get(user_id)
+        is_member = any(m.user_id == user_id for m in (team.members or []))
+        is_mentor = team.project and team.project.creator_id == user_id
+        is_admin = user.role and user.role.name == 'admin'
+        if not (is_member or is_mentor or is_admin):
+            return jsonify({'error': 'Unauthorized'}), 403
+        tasks = ProjectTask.query.filter_by(team_id=team_id).order_by(ProjectTask.created_at.desc()).all()
+        return jsonify({'tasks': [t.to_dict() for t in tasks]}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@teams_bp.route('/<int:team_id>/tasks', methods=['POST'])
+@jwt_required()
+def create_team_task(team_id):
+    """Create task (mentor only)"""
+    try:
+        user_id = int(get_jwt_identity())
+        user = User.query.get(user_id)
+        team = Team.query.get(team_id)
+        if not team or not team.project_id:
+            return jsonify({'error': 'Team not found'}), 404
+        if team.project.creator_id != user_id and (not user.role or user.role.name != 'admin'):
+            return jsonify({'error': 'Only mentor or admin can create tasks'}), 403
+        data = request.get_json() or {}
+        title = (data.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'Title is required'}), 400
+        deadline = None
+        if data.get('deadline'):
+            try:
+                deadline = datetime.fromisoformat(data['deadline'].replace('Z', '+00:00'))
+            except (ValueError, TypeError):
+                pass
+        task = ProjectTask(
+            team_id=team_id,
+            project_id=team.project_id,
+            title=title,
+            description=data.get('description', ''),
+            assignee_id=data.get('assignee_id'),
+            status='pending',
+            deadline=deadline,
+            created_by=user_id
+        )
+        db.session.add(task)
+        db.session.commit()
+        return jsonify({'message': 'Task created', 'task': task.to_dict()}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@teams_bp.route('/<int:team_id>/tasks/<int:task_id>', methods=['PUT'])
+@jwt_required()
+def update_team_task(team_id, task_id):
+    """Update task (status, assignee) - mentor or assignee"""
+    try:
+        user_id = int(get_jwt_identity())
+        task = ProjectTask.query.filter_by(id=task_id, team_id=team_id).first()
+        if not task:
+            return jsonify({'error': 'Task not found'}), 404
+        team = Team.query.get(team_id)
+        if not team:
+            return jsonify({'error': 'Team not found'}), 404
+        user = User.query.get(user_id)
+        is_mentor = team.project and team.project.creator_id == user_id
+        is_admin = user.role and user.role.name == 'admin'
+        is_assignee = task.assignee_id == user_id
+        is_member = any(m.user_id == user_id for m in (team.members or []))
+        if not (is_mentor or is_admin or is_assignee or is_member):
+            return jsonify({'error': 'Unauthorized'}), 403
+        data = request.get_json() or {}
+        if 'status' in data and data['status'] in ('pending', 'in_progress', 'completed'):
+            if is_mentor or is_admin or is_assignee:
+                task.status = data['status']
+        if 'assignee_id' in data and (is_mentor or is_admin):
+            task.assignee_id = data['assignee_id'] or None
+        if 'title' in data and (is_mentor or is_admin):
+            task.title = (data['title'] or '').strip() or task.title
+        if 'description' in data and (is_mentor or is_admin):
+            task.description = data.get('description', '')
+        if 'deadline' in data and (is_mentor or is_admin):
+            task.deadline = datetime.fromisoformat(data['deadline'].replace('Z', '+00:00')) if data.get('deadline') else None
+        db.session.commit()
+        return jsonify({'message': 'Task updated', 'task': task.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
 
 @teams_bp.route('/<int:team_id>/members/<int:member_id>', methods=['DELETE'])
 @jwt_required()

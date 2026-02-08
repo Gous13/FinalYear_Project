@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import SkillsInput from '../components/SkillsInput'
+import SkillsSection from '../components/SkillsSection'
 import toast from 'react-hot-toast'
 import { 
   User, Plus, Search, Sparkles, Users, Briefcase, 
@@ -324,6 +325,9 @@ const StudentDashboard = () => {
             </div>
           </div>
         )}
+
+        {/* Skills & Assessment */}
+        {profile && <SkillsSection />}
 
         {/* Recommendations */}
         <div className="bg-white rounded-lg shadow-sm p-6">

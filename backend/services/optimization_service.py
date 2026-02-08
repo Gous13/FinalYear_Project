@@ -6,6 +6,15 @@ from ortools.sat.python import cp_model
 import json
 import numpy as np
 
+
+def _get_verified_skills_for_profile(profile):
+    """Get verified skill names for a profile; fallback to skills_description keywords if none."""
+    from models.student_skill import StudentSkill
+    verified = StudentSkill.query.filter_by(user_id=profile.user_id, status='verified').all()
+    if verified:
+        return {s.skill_name.lower().strip() for s in verified}
+    return None
+
 class OptimizationService:
     """Service for constraint-based team formation optimization"""
     
@@ -124,14 +133,18 @@ class OptimizationService:
         required_keywords = nlp.extract_keywords(project_text, top_n=10) if project_text else []
         required_keywords_set = set(required_keywords)
 
-        # Extract skills for diversity calculation and coverage
+        # Extract skills for diversity calculation and coverage (prefer verified skills)
         profile_skills_dict = {}
         profile_required_hits = {}  # i -> count of required keywords hit
         availability_hours = {}
         years = {}
         gpas = {}
         for i, profile in enumerate(profiles):
-            skills = set(nlp.extract_keywords(profile.skills_description or '', top_n=10))
+            verified_skills = _get_verified_skills_for_profile(profile)
+            if verified_skills:
+                skills = verified_skills
+            else:
+                skills = set(nlp.extract_keywords(profile.skills_description or '', top_n=10))
             interests = set(nlp.extract_keywords(profile.interests_description or '', top_n=10))
             experience = set(nlp.extract_keywords(profile.experience_description or '', top_n=10))
             token_set = skills | interests | experience
