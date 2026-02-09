@@ -9,10 +9,37 @@ from models.user import User
 from models.team import Team, TeamMember
 from models.project import Project, Hackathon
 from models.project_task import ProjectTask
+from models.message import Message
 from utils.decorators import mentor_or_admin_required
 from datetime import datetime
 
 teams_bp = Blueprint('teams', __name__)
+
+
+def _create_notification_message(sender: User, receiver: User, content: str, notif_type: str = 'message', related_id=None):
+    """
+    Helper to create a typed notification backed by the Message model.
+    This is best-effort and deliberately non-critical: failures here must
+    never break core team/task flows.
+    """
+    if not sender or not receiver or not content:
+        return None
+
+    try:
+        msg = Message(
+            sender_id=sender.id,
+            sender_role=sender.role.name if getattr(sender, 'role', None) else 'unknown',
+            receiver_id=receiver.id,
+            receiver_role=receiver.role.name if getattr(receiver, 'role', None) else 'unknown',
+            content=content,
+            type=notif_type or 'message',
+            related_id=related_id
+        )
+        db.session.add(msg)
+        return msg
+    except Exception:
+        # Silently ignore notification failures
+        return None
 
 @teams_bp.route('', methods=['POST'])
 @jwt_required()
@@ -111,6 +138,23 @@ def create_team():
                             'team': existing_team.to_dict() if existing_team else None,
                             'teams_auto_formed': teams_count
                         }), 200
+
+                # Project-level notification: let the project mentor know a student joined a team
+                if project_id and project and project.creator_id:
+                    try:
+                        joiner = User.query.get(user_id)
+                        mentor = User.query.get(project.creator_id)
+                        if joiner and mentor and mentor.id != joiner.id:
+                            _create_notification_message(
+                                sender=joiner,
+                                receiver=mentor,
+                                content=f"{joiner.full_name} joined a team for your project '{project.title}'",
+                                notif_type='project',
+                                related_id=project.id
+                            )
+                            db.session.commit()
+                    except Exception:
+                        db.session.rollback()
                 
                 return jsonify({
                     'message': 'Successfully joined existing team',
@@ -173,6 +217,23 @@ def create_team():
                     'team': new_team.to_dict() if new_team else None,
                     'teams_auto_formed': teams_count
                 }), 201
+
+        # Project notification: let the mentor know a new team was created
+        if project_id and project and project.creator_id:
+            try:
+                creator = User.query.get(user_id)
+                mentor = User.query.get(project.creator_id)
+                if creator and mentor and mentor.id != creator.id:
+                    _create_notification_message(
+                        sender=creator,
+                        receiver=mentor,
+                        content=f"New team '{team.name}' created for your project '{project.title}'",
+                        notif_type='project',
+                        related_id=project.id
+                    )
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
         
         return jsonify({
             'message': 'Team created successfully',
@@ -393,6 +454,23 @@ def create_team_task(team_id):
             created_by=user_id
         )
         db.session.add(task)
+
+        # Notification: task assignment for assignee (if any)
+        if task.assignee_id:
+            try:
+                assignee = User.query.get(task.assignee_id)
+                if assignee:
+                    _create_notification_message(
+                        sender=user,
+                        receiver=assignee,
+                        content=f"You have been assigned a new task: {task.title}",
+                        notif_type='task',
+                        related_id=task.id
+                    )
+            except Exception:
+                # Non-critical path
+                pass
+
         db.session.commit()
         return jsonify({'message': 'Task created', 'task': task.to_dict()}), 201
     except Exception as e:
@@ -420,6 +498,11 @@ def update_team_task(team_id, task_id):
         if not (is_mentor or is_admin or is_assignee or is_member):
             return jsonify({'error': 'Unauthorized'}), 403
         data = request.get_json() or {}
+
+        # Capture previous values for notification logic
+        old_status = task.status
+        old_assignee_id = task.assignee_id
+
         if 'status' in data and data['status'] in ('pending', 'in_progress', 'completed'):
             if is_mentor or is_admin or is_assignee:
                 task.status = data['status']
@@ -431,6 +514,35 @@ def update_team_task(team_id, task_id):
             task.description = data.get('description', '')
         if 'deadline' in data and (is_mentor or is_admin):
             task.deadline = datetime.fromisoformat(data['deadline'].replace('Z', '+00:00')) if data.get('deadline') else None
+
+        # Task-related notifications
+        try:
+            # Notify new assignee if changed
+            if task.assignee_id and task.assignee_id != old_assignee_id:
+                new_assignee = User.query.get(task.assignee_id)
+                if new_assignee:
+                    _create_notification_message(
+                        sender=user,
+                        receiver=new_assignee,
+                        content=f"You have been assigned task: {task.title}",
+                        notif_type='task',
+                        related_id=task.id
+                    )
+            # Notify assignee on status change
+            elif task.assignee_id and task.status != old_status:
+                current_assignee = User.query.get(task.assignee_id)
+                if current_assignee:
+                    _create_notification_message(
+                        sender=user,
+                        receiver=current_assignee,
+                        content=f"Task '{task.title}' status updated to {task.status}",
+                        notif_type='task',
+                        related_id=task.id
+                    )
+        except Exception:
+            # Never let notification issues break task updates
+            pass
+
         db.session.commit()
         return jsonify({'message': 'Task updated', 'task': task.to_dict()}), 200
     except Exception as e:

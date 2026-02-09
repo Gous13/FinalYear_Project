@@ -16,9 +16,15 @@ class Message(db.Model):
     receiver_role = db.Column(db.String(50), nullable=False)
     content = db.Column(db.Text, nullable=False)
     is_read = db.Column(db.Boolean, default=False)
+    # Categorization for unified notifications/message panel
+    # 'message' = direct or group-related chat, 'task' = task assignment/update, 'project' = project events
+    type = db.Column(db.String(20), nullable=False, default='message', index=True)
+    # Optional link to related domain entity (e.g., project_tasks.id or projects.id)
+    related_id = db.Column(db.Integer, nullable=True, index=True)
     # When set, message is hidden from receiver's inbox (clear/delete by receiver)
     deleted_by_receiver_at = db.Column(db.DateTime, nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Server-generated timestamp (UTC) for consistent chronological ordering
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
     
     sender = db.relationship('User', foreign_keys=[sender_id], lazy=True)
     receiver = db.relationship('User', foreign_keys=[receiver_id], lazy=True)
@@ -32,6 +38,8 @@ class Message(db.Model):
             'receiver_role': self.receiver_role,
             'content': self.content,
             'is_read': self.is_read,
+            'type': self.type or 'message',
+            'related_id': self.related_id,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
         if include_sender and self.sender:

@@ -50,6 +50,7 @@ def create_app(config_class=Config):
     from routes.messages import messages_bp
     from routes.skills import skills_bp
     from routes.files import files_bp
+    from routes.notifications import notifications_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(users_bp, url_prefix='/api/users')
@@ -61,6 +62,7 @@ def create_app(config_class=Config):
     app.register_blueprint(messages_bp, url_prefix='/api/messages')
     app.register_blueprint(skills_bp, url_prefix='/api/skills')
     app.register_blueprint(files_bp, url_prefix='/api')
+    app.register_blueprint(notifications_bp, url_prefix='/api/notifications')
     
     # Create tables
     with app.app_context():

@@ -21,9 +21,16 @@ api.interceptors.request.use(
   }
 )
 
-// Response interceptor for error handling
+// Response interceptor - ensure JSON is parsed
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (typeof response.data === 'string' && /application\/json/i.test(response.headers?.['content-type'] || '')) {
+      try {
+        response.data = JSON.parse(response.data)
+      } catch (_) {}
+    }
+    return response
+  },
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token')

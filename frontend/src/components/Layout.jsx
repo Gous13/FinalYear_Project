@@ -2,7 +2,8 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
-import { LogOut, User, LayoutDashboard, Users, Settings, Mail } from 'lucide-react'
+import { LogOut, User, LayoutDashboard, Users, Settings } from 'lucide-react'
+import NotificationDropdown from './NotificationDropdown'
 
 const Layout = ({ children }) => {
   const { user, logout } = useAuth()
@@ -68,18 +69,7 @@ const Layout = ({ children }) => {
               </div>
             </div>
             <div className="flex items-center space-x-4">
-              <Link
-                to="/messages"
-                className="relative flex items-center p-2 text-gray-600 hover:text-primary-600 rounded-lg hover:bg-gray-50"
-                title="Messages"
-              >
-                <Mail className="w-5 h-5" />
-                {unreadCount > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
-              </Link>
+              <NotificationDropdown unreadCount={unreadCount} />
               <div className="flex items-center space-x-2 text-sm text-gray-700">
                 <User className="w-4 h-4" />
                 <span>{user?.full_name || user?.email}</span>

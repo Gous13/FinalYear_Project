@@ -8,14 +8,16 @@
 
 ## Post-Setup: Seed Skill Assessments
 
-After `init_db.py`, run the assessment seed to populate MCQ questions:
+After `init_db.py`, run the assessment seeds:
 
 ```bash
 cd backend
 python seed_assessments.py
+python seed_practical_assessments.py
 ```
 
-This adds assessment questions for: Python, JavaScript, React, SQL, Machine Learning, Flask.
+- `seed_assessments.py`: MCQ questions for Python, JavaScript, React, SQL, Machine Learning, Flask (legacy)
+- `seed_practical_assessments.py`: Practical (code-based) assessments for SQL, Python, HTML/CSS/JavaScript, C/C++, Java (3–4 question sets per skill)
 
 ## Start the Application
 
@@ -36,10 +38,11 @@ Runs on `http://localhost:3000` (or port shown)
 ## New Features - Quick Verification
 
 ### 1. Skill Assessment (Student)
-- Login as student → Create/Edit profile with skills (e.g., Python, React)
+- Login as student → Create/Edit profile with skills (e.g., Python, SQL, Java)
 - Go to "My Skills" section → Click **Verify** on an unverified skill
-- Complete MCQ assessment → Skill becomes Verified on 70%+ score
-- Verified skills are used for recommendations
+- **Practical skills** (SQL, Python, HTML/CSS/JavaScript, C/C++, Java): 1 Easy + 1 Hard code task, 15 min timer, auto-evaluated
+- **Other skills**: MCQ assessment (70%+ to verify)
+- Verified skills are used for NLP matching and project recommendations
 
 ### 2. Team Skill Validation (Mentor / Team)
 - Form a team or join a project
@@ -66,7 +69,10 @@ Runs on `http://localhost:3000` (or port shown)
 | POST | `/api/skills/add` | Add skill |
 | GET | `/api/skills/my-skills` | List skills with status |
 | GET | `/api/skills/assessment/<skill_name>` | Get MCQ questions |
-| POST | `/api/skills/assess/<student_skill_id>` | Submit assessment |
+| POST | `/api/skills/assess/<student_skill_id>` | Submit MCQ assessment |
+| GET | `/api/skills/practical/check/<student_skill_id>` | Check if practical assessment available |
+| POST | `/api/skills/practical/start/<student_skill_id>` | Start practical assessment (get questions) |
+| POST | `/api/skills/practical/submit` | Submit practical assessment (code answers) |
 | GET | `/api/teams/<id>/skill-validation` | Team skill confidence |
 | GET | `/api/projects/<id>/teams-validation` | All teams validation |
 | GET/POST | `/api/teams/<id>/tasks` | List/Create tasks |

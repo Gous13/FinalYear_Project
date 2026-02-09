@@ -2,11 +2,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import { CheckCircle, AlertCircle, ClipboardList } from 'lucide-react'
 import SkillAssessmentModal from './SkillAssessmentModal'
+import PracticalAssessmentModal from './PracticalAssessmentModal'
 import { useState } from 'react'
 
 const SkillsSection = () => {
   const queryClient = useQueryClient()
   const [assessingSkill, setAssessingSkill] = useState(null)
+  const [usePractical, setUsePractical] = useState(null) // null=loading, true=practical, false=mcq
 
   const { data: skillsData } = useQuery({
     queryKey: ['my-skills'],
@@ -65,7 +67,16 @@ const SkillsSection = () => {
                   <span className="text-xs">✓ {skill.assessment_score}%</span>
                 ) : (
                   <button
-                    onClick={() => setAssessingSkill(skill)}
+                    onClick={async () => {
+                      setAssessingSkill(skill)
+                      setUsePractical(null)
+                      try {
+                        const res = await api.get(`/skills/practical/check/${skill.id}`)
+                        setUsePractical(!!res.data?.available)
+                      } catch {
+                        setUsePractical(false)
+                      }
+                    }}
                     className="ml-1 px-2 py-0.5 text-xs bg-primary-600 text-white rounded hover:bg-primary-700"
                   >
                     Verify
@@ -77,12 +88,26 @@ const SkillsSection = () => {
         </>
       )}
 
-      {assessingSkill && (
-        <SkillAssessmentModal
+      {assessingSkill && usePractical === true && (
+        <PracticalAssessmentModal
           skill={assessingSkill}
-          onClose={() => setAssessingSkill(null)}
+          onClose={() => { setAssessingSkill(null); setUsePractical(null) }}
           onComplete={handleAssessmentComplete}
         />
+      )}
+      {assessingSkill && usePractical === false && (
+        <SkillAssessmentModal
+          skill={assessingSkill}
+          onClose={() => { setAssessingSkill(null); setUsePractical(null) }}
+          onComplete={handleAssessmentComplete}
+        />
+      )}
+      {assessingSkill && usePractical === null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 text-center">
+            <p className="text-gray-600">Loading assessment...</p>
+          </div>
+        </div>
       )}
     </div>
   )

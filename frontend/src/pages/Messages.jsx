@@ -6,6 +6,7 @@ import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
 import { Mail, Send, UserPlus, Search, Users } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { formatTimestamp } from '../utils/time'
 
 const Messages = () => {
   const { user } = useAuth()
@@ -336,7 +337,7 @@ const Messages = () => {
                             )}
                             <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
                             <p className={`text-xs mt-1 ${isMine ? 'text-primary-100' : 'text-gray-500'}`}>
-                              {msg.created_at ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                              {formatTimestamp(msg.created_at)}
                             </p>
                           </div>
                         </div>
@@ -391,7 +392,7 @@ const Messages = () => {
                         >
                           <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
                           <p className={`text-xs mt-1 ${msg.is_mine ? 'text-primary-100' : 'text-gray-500'}`}>
-                            {msg.created_at ? new Date(msg.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+                            {formatTimestamp(msg.created_at)}
                           </p>
                         </div>
                       </div>
