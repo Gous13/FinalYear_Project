@@ -16,6 +16,7 @@ from services.skill_assessment_service import (
     resolve_assessment_skill,
     start_assessment,
     submit_assessment,
+    run_assessment,
 )
 
 skills_bp = Blueprint('skills', __name__)
@@ -99,7 +100,7 @@ def get_assessment(skill_name):
 @skills_bp.route('/assess/<int:student_skill_id>', methods=['POST'])
 @jwt_required()
 @student_required
-def submit_assessment(student_skill_id):
+def submit_mcq_assessment(student_skill_id):
     """Submit assessment answers and get result"""
     try:
         user_id = int(get_jwt_identity())
@@ -193,11 +194,13 @@ def check_practical_available(student_skill_id):
         student_skill = StudentSkill.query.get(student_skill_id)
         if not student_skill or student_skill.user_id != user_id:
             return jsonify({'error': 'Skill not found'}), 404
-        from services.skill_assessment_service import can_start_assessment
-        can_start, msg = can_start_assessment(user_id, student_skill)
-        available = resolve_assessment_skill(student_skill.skill_name) is not None
+        from services.skill_assessment_service import resolve_assessment_skill, can_start_assessment
+        is_supported = resolve_assessment_skill(student_skill.skill_name) is not None
+        can_start, msg = can_start_assessment(user_id, student_skill) if is_supported else (False, "Not supported")
+        
         return jsonify({
-            'available': available and can_start,
+            'available': is_supported and can_start,
+            'is_supported': is_supported,
             'message': msg,
             'skill_name': student_skill.skill_name,
         }), 200
@@ -230,72 +233,48 @@ def submit_practical():
     """Submit practical assessment answers and get score"""
     try:
         user_id = int(get_jwt_identity())
-
-        # Parse request body robustly
         data = request.get_json(silent=True) or {}
-        if not data and request.data:
-            try:
-                raw_body = request.data.decode('utf-8') if isinstance(request.data, bytes) else request.data
-                data = json.loads(raw_body)
-            except (ValueError, TypeError):
-                data = {}
-
+        
         student_skill_id = data.get('student_skill_id')
         set_id = data.get('set_id')
-        answers = data.get('answers') or data.get('responses') or data.get('solutions') or {}
-        if not isinstance(answers, dict):
-            answers = {}
+        answers = data.get('answers') or {}
 
-        # If required IDs are missing, return a safe default success
         if not student_skill_id or not set_id:
-            fallback = {
-                'score': 0.0,
-                'passed': True,
-                'easy_score': 0.0,
-                'hard_score': 0.0,
-                'skill': None,
-            }
-            from flask import Response as FlaskResponse
-            body = json.dumps(fallback, default=str)
-            return FlaskResponse(body, status=200, mimetype='application/json')
+            return jsonify({'error': 'Missing student_skill_id or set_id'}), 400
 
-        # Try full evaluation; on any error, fall back to a safe success response
-        try:
-            timeout = getattr(current_app.config, 'ASSESSMENT_TIMEOUT_SECONDS', 30)
-            result = submit_assessment(user_id, int(student_skill_id), int(set_id), answers, timeout=timeout)
-            if 'error' in result:
-                # Normalize to a safe success payload
-                result = {
-                    'score': 75.0,
-                    'passed': True,
-                    'easy_score': 75.0,
-                    'hard_score': 75.0,
-                    'skill': None,
-                }
-        except Exception:
-            db.session.rollback()
-            result = {
-                'score': 75.0,
-                'passed': True,
-                'easy_score': 75.0,
-                'hard_score': 75.0,
-                'skill': None,
-            }
+        timeout = getattr(current_app.config, 'ASSESSMENT_TIMEOUT_SECONDS', 30)
+        result = submit_assessment(user_id, int(student_skill_id), int(set_id), answers, timeout=timeout)
+        
+        if 'error' in result:
+            return jsonify({'error': result['error']}), 400
 
-        # Manual JSON serialization to avoid Flask's JSON encoder issues
-        from flask import Response as FlaskResponse
-        body = json.dumps(result, default=str)
-        return FlaskResponse(body, status=200, mimetype='application/json')
+        return jsonify(result), 200
     except Exception as e:
         db.session.rollback()
-        # As a last resort, return a minimal success response
-        from flask import Response as FlaskResponse
-        fallback = {
-            'score': 75.0,
-            'passed': True,
-            'easy_score': 75.0,
-            'hard_score': 75.0,
-            'skill': None,
-        }
-        body = json.dumps(fallback, default=str)
-        return FlaskResponse(body, status=200, mimetype='application/json')
+        return jsonify({'error': str(e)}), 500
+
+
+@skills_bp.route('/practical/run', methods=['POST'])
+@jwt_required()
+@student_required
+def run_practical():
+    """Run code against sample tests (Sandbox)"""
+    try:
+        user_id = int(get_jwt_identity())
+        data = request.get_json(silent=True) or {}
+        
+        student_skill_id = data.get('student_skill_id')
+        question_id = data.get('question_id')
+        code = data.get('code')
+        
+        if not all([student_skill_id, question_id, code]):
+            return jsonify({'error': 'Missing required fields'}), 400
+            
+        result = run_assessment(user_id, student_skill_id, question_id, code)
+        
+        if 'error' in result:
+            return jsonify({'error': result['error']}), 400
+            
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

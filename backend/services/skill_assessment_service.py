@@ -76,7 +76,7 @@ def can_start_assessment(user_id: int, student_skill) -> Tuple[bool, str]:
         return False, "No assessment questions seeded for this skill"
     # Cooldown after failed attempt
     from flask import current_app
-    cooldown_hours = getattr(current_app.config, 'ASSESSMENT_COOLDOWN_HOURS', 24)
+    cooldown_hours = getattr(current_app.config, 'ASSESSMENT_COOLDOWN_HOURS', 1)
     last_attempt = AssessmentAttempt.query.filter_by(
         user_id=user_id,
         skill_name=assessment_skill,
@@ -85,8 +85,14 @@ def can_start_assessment(user_id: int, student_skill) -> Tuple[bool, str]:
     if last_attempt:
         since = datetime.utcnow() - last_attempt.timestamp
         if since < timedelta(hours=cooldown_hours):
-            remain = cooldown_hours - int(since.total_seconds() / 3600)
-            return False, f"Retry after {remain} hour(s) (cooldown)"
+            total_seconds_left = int((timedelta(hours=cooldown_hours) - since).total_seconds())
+            hours_left = total_seconds_left // 3600
+            minutes_left = (total_seconds_left % 3600) // 60
+            
+            if hours_left > 0:
+                return False, f"Retry after {hours_left} hour(s) and {minutes_left} minute(s)"
+            else:
+                return False, f"Retry after {minutes_left} minute(s)"
     return True, ""
 
 
@@ -144,14 +150,16 @@ def submit_assessment(user_id: int, student_skill_id: int, set_id: int, answers:
     if not all(questions):
         return {'error': 'Invalid question set'}
 
-    # At this stage the frontend has already enforced that both answers are filled.
-    # To keep the system stable for demos and profile evaluation, we assign a full score
-    # whenever an assessment is completed, instead of relying on fragile code execution.
-    easy_score: float = 100.0
-    hard_score: float = 100.0
-    final_score: float = 100.0
+    # Perform real evaluation using the evaluators in assessment_evaluator.py
+    easy_score, easy_msg, easy_detail = evaluate(answers.get(str(aset.easy_question_id), ''), aset.easy_question.to_dict())
+    hard_score, hard_msg, hard_detail = evaluate(answers.get(str(aset.hard_question_id), ''), aset.hard_question.to_dict())
 
-    passed = True
+    # Weighted final score (Easy: 40%, Hard: 60%)
+    final_score = (easy_score * 0.4) + (hard_score * 0.6)
+    
+    # Passing threshold is 60%
+    pass_threshold = 60.0
+    passed = final_score >= pass_threshold
 
     attempt = AssessmentAttempt(
         user_id=user_id,
@@ -163,7 +171,8 @@ def submit_assessment(user_id: int, student_skill_id: int, set_id: int, answers:
     )
     db.session.add(attempt)
 
-    student_skill.status = 'verified'
+    # Update StudentSkill status
+    student_skill.status = 'passed' if passed else 'failed'
     student_skill.assessment_score = round(final_score, 1)
     student_skill.assessed_at = datetime.utcnow()
 
@@ -188,8 +197,33 @@ def submit_assessment(user_id: int, student_skill_id: int, set_id: int, answers:
 
     return {
         'score': float(round(final_score, 1)),
-        'passed': True,
+        'passed': passed,
+        'skill_status': student_skill.status,
         'easy_score': float(round(easy_score, 1)),
         'hard_score': float(round(hard_score, 1)),
+        'easy_message': easy_msg,
+        'hard_message': hard_msg,
         'skill': skill_data,
+    }
+
+
+def run_assessment(user_id: int, student_skill_id: int, question_id: int, code: str) -> dict:
+    """
+    Run code against sample test cases (Run button behavior).
+    Does NOT finalize score or update DB.
+    """
+    from models.practical_assessment import AssessmentQuestion
+    q = AssessmentQuestion.query.get(question_id)
+    if not q:
+        return {'error': 'Question not found'}
+    
+    score, message, detail = evaluate(code, q.to_dict())
+    
+    return {
+        'score': float(round(score, 1)),
+        'message': message,
+        'success': score >= 60.0,
+        'passed_count': detail.get('passed_count', 0),
+        'total_count': detail.get('total_count', 0),
+        'results': detail.get('results', [])
     }

@@ -13,7 +13,7 @@ class StudentSkill(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     skill_name = db.Column(db.String(100), nullable=False, index=True)
-    status = db.Column(db.String(20), default='unverified')  # unverified, verified
+    status = db.Column(db.String(20), default='unverified')  # unverified, passed, failed
     assessment_score = db.Column(db.Float)  # 0-100 if verified
     assessed_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

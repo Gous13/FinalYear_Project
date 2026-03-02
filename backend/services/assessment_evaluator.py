@@ -18,157 +18,109 @@ from typing import Dict, List, Tuple, Optional
 PYTHON_EXE = sys.executable or ('py' if os.name == 'nt' else 'python3') or 'python'
 
 
-def evaluate_sql(code: str, expected_output: str, test_cases_json: str) -> Tuple[float, str]:
+def evaluate_sql(code: str, expected_output: str, test_cases_json: str) -> Tuple[float, str, dict]:
     """Execute SQL on in-memory SQLite and compare with expected output."""
     try:
         code = (code or '').strip().rstrip(';')
         if not code:
-            return 0.0, "No SQL provided"
-
-        conn = sqlite3.connect(':memory:')
-        cur = conn.cursor()
+            return 0.0, "No SQL provided", {"passed_count": 0, "total_count": 1, "results": []}
 
         test_cases = json.loads(test_cases_json) if isinstance(test_cases_json, str) and test_cases_json else []
-        for tc in (test_cases if isinstance(test_cases, list) else []):
-            setup = tc.get('setup', '') if isinstance(tc, dict) else ''
-            if setup:
-                try:
-                    cur.executescript(setup)
-                except sqlite3.Error:
-                    pass
+        if not isinstance(test_cases, list): test_cases = []
+        
+        # Default case if no test cases provided
+        if not test_cases:
+            test_cases = [{"setup": "", "expected": expected_output}]
 
-        try:
-            cur.execute(code)
-            rows = cur.fetchall()
-        except sqlite3.Error as e:
-            conn.close()
-            # Fallback: static SQL check if execution fails (no schema)
-            if 'no such table' in str(e).lower() or 'no such column' in str(e).lower():
-                score = 50
-                if 'select' in code.lower():
-                    score += 25
-                if 'from' in code.lower():
-                    score += 15
-                if 'where' in code.lower() or 'join' in code.lower() or 'group' in code.lower():
-                    score += 20
-                return float(min(100, score)), "Static check (no test schema)"
-            return 0.0, f"SQL error: {str(e)}"
+        passed_count = 0
+        results = []
+        
+        for tc in test_cases:
+            conn = sqlite3.connect(':memory:')
+            cur = conn.cursor()
+            setup = tc.get('setup', '')
+            exp = str(tc.get('expected', tc.get('expected_output', expected_output or ''))).strip().lower()
+            
+            res_item = {"passed": False, "expected": exp, "got": ""}
+            
+            try:
+                if setup: cur.executescript(setup)
+                cur.execute(code)
+                rows = cur.fetchall()
+                got = '\n'.join(','.join(str(c) for c in r) for r in rows).lower().strip()
+                res_item["got"] = got
+                
+                exp_n = re.sub(r'\s+', ' ', exp.replace('\n', ' '))
+                got_n = re.sub(r'\s+', ' ', got.replace('\n', ' '))
+                
+                if exp_n == got_n:
+                    passed_count += 1
+                    res_item["passed"] = True
+                elif exp in got or (got and got in exp):
+                    passed_count += 0.5
+                    res_item["passed"] = True
+                    res_item["message"] = "Partial Match"
+            except sqlite3.Error as e:
+                res_item["message"] = str(e)
+                # Removed static check fallback - strictly test case based now
+            finally:
+                results.append(res_item)
+                conn.close()
 
-        conn.close()
-
-        exp = (expected_output or '').strip().lower()
-        got = '\n'.join(','.join(str(c) for c in r) for r in rows).lower().strip()
-
-        if not exp:
-            return 100.0 if rows else 50.0, "Executed"
-
-        exp_n = re.sub(r'\s+', ' ', exp.replace('\n', ' '))
-        got_n = re.sub(r'\s+', ' ', got.replace('\n', ' '))
-        if exp_n == got_n:
-            return 100.0, "Correct"
-        if exp in got or got in exp or any(ln in got for ln in exp.split('\n') if ln.strip()):
-            return 80.0, "Partial match"
-        if rows:
-            return 50.0, "Different output"
-        return 0.0, "No rows"
+        total = len(test_cases)
+        score = (passed_count / total * 100) if total > 0 else 0
+        return float(min(100, score)), f"Passed {int(passed_count)}/{total} test cases", {
+            "passed_count": int(passed_count),
+            "total_count": total,
+            "results": results
+        }
     except Exception as e:
-        return 0.0, f"Error: {str(e)}"
+        return 0.0, f"Error: {str(e)}", {"passed_count": 0, "total_count": 1, "results": []}
 
 
-def _python_static_fallback(code: str, expected_output: str) -> Tuple[float, str]:
-    """Fallback when subprocess fails - check if code looks correct."""
-    c = (code or '').strip()
-    if not c:
-        return 0.0, "No code"
-    code_lower = c.lower()
-    exp = (expected_output or '').strip().lower()
-    score = 75
-    if 'print' in code_lower:
-        score += 15
-    if exp:
-        if exp in c or exp in code_lower:
-            score += 15
-        elif exp == '15' and ('sum' in code_lower or '15' in c or '1' in c):
-            score += 15
-        elif exp == 'olleh' and ('[::-1]' in c or 'olleh' in code_lower or 'hello' in code_lower):
-            score += 15
-    return float(min(100, score)), "Static"
-
-
-def evaluate_python(code: str, expected_output: str, test_cases_json: str, timeout: int = 10) -> Tuple[float, str]:
+def evaluate_python(code: str, expected_output: str, test_cases_json: str, timeout: int = 10) -> Tuple[float, str, dict]:
     """Run Python in subprocess, execute hidden test cases."""
     try:
         code = (code or '').strip()
         if not code:
-            return 0.0, "No code provided"
+            return 0.0, "No code provided", {"passed_count": 0, "total_count": 1, "results": []}
 
         test_cases = json.loads(test_cases_json) if isinstance(test_cases_json, str) and test_cases_json else (test_cases_json if isinstance(test_cases_json, list) else [])
+        
+        # Strictly test-case based. If no test cases, we try to run it once.
         if not test_cases:
-            # Try inline exec first (no subprocess) - safer for simple scripts
             try:
                 from io import StringIO
                 old_stdout = sys.stdout
                 sys.stdout = buf = StringIO()
                 try:
                     exec(code, {'__builtins__': __builtins__})
+                    exec_success = True
+                except Exception as e:
+                    exec_success = False
+                    exec_err = str(e)
                 finally:
                     sys.stdout = old_stdout
-                stdout = buf.getvalue().strip()
+                
+                if exec_success:
+                    stdout = buf.getvalue().strip()
+                    exp = (expected_output or '').strip()
+                    passed = (exp.lower() in stdout.lower()) if exp else True
+                    return (100.0 if passed else 0.0), ("Correct" if passed else "Incorrect output"), {
+                        "passed_count": 1 if passed else 0,
+                        "total_count": 1,
+                        "results": [{"passed": passed, "got": stdout, "expected": exp}]
+                    }
             except Exception:
-                stdout = None
+                pass
+            return 0.0, "Execution failed or no test cases passed", {"passed_count": 0, "total_count": 1, "results": []}
 
-            if stdout is not None:
-                exp = (expected_output or '').strip()
-                out_clean = re.sub(r'\s+', ' ', stdout)
-                exp_clean = re.sub(r'\s+', ' ', exp)
-                if exp and exp_clean and exp_clean.lower() in out_clean.lower():
-                    return 100.0, "Correct"
-                if exp and stdout and (exp in stdout or exp_clean in out_clean):
-                    return 95.0, "Partial"
-                if exp and stdout:
-                    return 85.0, "Different output"
-                return 100.0 if stdout else 80.0, "Executed"
-
-            # Fallback: subprocess
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
-                f.write(code)
-                path = f.name
-            try:
-                result = subprocess.run(
-                    [PYTHON_EXE, path],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    cwd=os.path.dirname(path),
-                )
-                stdout = (result.stdout or '').strip()
-                if result.returncode != 0:
-                    return _python_static_fallback(code, expected_output)
-                exp = (expected_output or '').strip()
-                out_clean = re.sub(r'\s+', ' ', stdout)
-                exp_clean = re.sub(r'\s+', ' ', exp)
-                if exp and exp_clean and exp_clean.lower() in out_clean.lower():
-                    return 100.0, "Correct"
-                if exp and stdout and (exp in stdout or exp_clean in out_clean):
-                    return 95.0, "Partial"
-                if exp and stdout:
-                    return 85.0, "Different output"
-                return 100.0 if stdout else 80.0, "Executed"
-            except (FileNotFoundError, subprocess.SubprocessError, OSError):
-                return _python_static_fallback(code, expected_output)
-            finally:
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-            return _python_static_fallback(code, expected_output)
-
-        passed = 0
-        total = len(test_cases)
+        passed_count = 0
+        results = []
         for tc in test_cases:
             inp = tc.get('input', '')
-            exp = tc.get('expected', '')
-            # Wrap code to capture output
+            exp = str(tc.get('expected', '')).strip()
+            
             wrapped = f'''
 import sys
 _stdout = sys.stdout
@@ -188,131 +140,135 @@ print(res)
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
                 f.write(wrapped)
                 path = f.name
+            
+            current_result = {"passed": False, "input": inp, "expected": exp, "got": ""}
             try:
-                result = subprocess.run(
+                proc = subprocess.run(
                     [PYTHON_EXE, path],
                     input=inp,
                     capture_output=True,
                     text=True,
                     timeout=timeout,
                 )
-                out = (result.stdout or '').strip()
-                if str(exp).strip() == out:
-                    passed += 1
+                out = (proc.stdout or '').strip()
+                current_result["got"] = out
+                if exp == out:
+                    passed_count += 1
+                    current_result["passed"] = True
+                elif exp.lower() == out.lower() and exp: # Don't give partial for empty
+                    passed_count += 0.8 
+                    current_result["passed"] = True
+                    current_result["message"] = "Case insensitive match"
             except subprocess.TimeoutExpired:
-                pass
-            except Exception:
-                pass
+                current_result["message"] = "Timed out"
+            except Exception as e:
+                current_result["message"] = str(e)
             finally:
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
+                results.append(current_result)
+                try: os.unlink(path)
+                except: pass
 
-        score = (passed / total * 100) if total > 0 else 0
-        return score, f"{passed}/{total} test cases passed"
+        total = len(test_cases)
+        score = (passed_count / total * 100) if total > 0 else 0
+        return float(min(100, score)), f"Passed {int(passed_count)}/{total} test cases", {
+            "passed_count": int(passed_count),
+            "total_count": total,
+            "results": results
+        }
     except Exception as e:
-        return _python_static_fallback(code, expected_output)
+        return 0.0, f"Error: {str(e)}", {"passed_count": 0, "total_count": 0, "results": []}
 
 
-def evaluate_web(html: str, expected_output: str, test_cases_json: str) -> Tuple[float, str]:
-    """Rule-based parsing: required tags, CSS, JS validation, responsiveness."""
+def evaluate_web(html: str, expected_output: str, test_cases_json: str) -> Tuple[float, str, dict]:
+    """Rule-based parsing: strictly count required tags."""
     score = 0
     checks = []
+    results = []
     text = (html or '').lower()
 
-    # Required HTML structure
-    if '<form' in text or '<input' in text or '<button' in text:
-        score += 25
-        checks.append('form')
-    if '<input' in text or '<select' in text or '<textarea' in text:
-        score += 15
-        checks.append('input')
-    if '<style' in text or '.css' in text or 'style=' in text or 'style ' in text:
-        score += 20
-        checks.append('css')
-    if '<script' in text or '.js' in text:
-        score += 20
-        checks.append('js')
-    if 'validate' in text or 'addEventListener' in text or 'onclick' in text or 'onsubmit' in text or 'function' in text:
-        score += 15
-        checks.append('validation')
-    if '@media' in text or 'responsive' in text or 'flex' in text or 'grid' in text:
-        score += 10
-        checks.append('responsive')
-    if len(text) > 100:
-        score += 5
+    criteria = [
+        ('<form', 25, 'form'),
+        ('<input', 15, 'input'),
+        ('<style', 20, 'css'),
+        ('<script', 20, 'js'),
+        ('validate', 15, 'validation'),
+        ('@media', 5, 'responsive')
+    ]
+
+    for pattern, pts, name in criteria:
+        passed = pattern in text
+        if passed:
+            score += pts
+            checks.append(name)
+        results.append({"criterion": name, "passed": passed})
 
     score = min(100, score)
-    return float(score), f"Checks: {', '.join(checks) or 'basic structure'}"
+    # Strictly zero if nothing matches
+    if score < 20: score = 0
+
+    passed_count = len(checks)
+    total_count = len(criteria)
+    
+    return float(score), f"Passed {passed_count}/{total_count} criteria", {
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "results": results
+    }
 
 
-def evaluate_static_code(code: str, eval_type: str) -> Tuple[float, str]:
-    """Static analysis for C/C++/Java - keyword presence, structure, completeness."""
+def evaluate_static_code(code: str, eval_type: str) -> Tuple[float, str, dict]:
+    """Static analysis for C/C++/Java - strictly keyword based, 0 base score."""
     code = (code or '').strip()
-    if not code or len(code) < 5:
-        return 0.0, "No code provided"
+    if not code or len(code) < 10: # Increased minimum length
+        return 0.0, "No code provided", {"passed_count": 0, "total_count": 1, "results": []}
 
-    score = 50  # Base for substantial code
+    score = 0 
     checks = []
+    results = []
 
     if eval_type in ('cpp', 'c'):
-        if '#' in code or '#include' in code:
-            score += 15
-            checks.append('include')
-        if any(k in code for k in ('int', 'void', 'return', 'char')):
-            score += 20
-            checks.append('types')
-        if '{' in code and '}' in code:
-            score += 20
-            checks.append('blocks')
-        if 'for' in code or 'while' in code:
-            score += 15
-            checks.append('loop')
-        if 'if' in code or 'else' in code:
-            score += 15
-            checks.append('condition')
-        if any(k in code for k in ('main', 'printf', 'cout', 'cin', 'scanf')):
-            score += 15
-            checks.append('io')
-        if 'def ' not in code and 'def\t' not in code:  # Not Python
-            score += 5
-
+        criteria = [
+            ('#include', 25, 'headers'),
+            ('main', 25, 'main function'),
+            ('{', 25, 'logic blocks'),
+            (';', 25, 'semicolons')
+        ]
     elif eval_type == 'java':
-        if 'class' in code:
-            score += 25
-            checks.append('class')
-        if 'public' in code or 'private' in code or 'static' in code:
-            score += 15
-            checks.append('modifier')
-        if '{' in code and '}' in code:
-            score += 25
-            checks.append('blocks')
-        if 'for' in code or 'while' in code:
-            score += 15
-            checks.append('loop')
-        if 'if' in code or 'else' in code:
-            score += 15
-            checks.append('condition')
-        if 'return' in code or 'void' in code:
-            score += 15
-            checks.append('method')
-        if 'System.' in code or 'List' in code or 'ArrayList' in code:
-            score += 10
-            checks.append('stdlib')
+        criteria = [
+            ('class', 25, 'class definition'),
+            ('public static void main', 25, 'main method'),
+            ('System.out', 25, 'output statement'),
+            ('{', 25, 'blocks')
+        ]
+    else:
+        criteria = [('{', 50, 'syntax'), ('}', 50, 'structure')]
+
+    for kw, pts, name in criteria:
+        passed = kw in code
+        if passed:
+            score += pts
+            checks.append(name)
+        results.append({"criterion": name, "passed": passed})
 
     score = min(100, score)
-    return float(score), f"Checks: {', '.join(checks) or 'structure'}"
+    passed_count = len(checks)
+    total_count = len(criteria)
+
+    return float(score), f"Static check: {passed_count}/{total_count} passed", {
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "results": results
+    }
 
 
-def evaluate(code: str, question: Dict, timeout: int = 10) -> Tuple[float, str]:
+def evaluate(code: str, question: Dict, timeout: int = 10) -> Tuple[float, str, dict]:
     """
     Route to correct evaluator based on evaluation_type.
-    question: dict with keys evaluation_type, expected_output, test_cases_json
+    Returns (score, message, detail_dict)
     """
     code = (code or '').strip()
     if not code:
-        return 0.0, "No code"
+        return 0.0, "No code submitted", {"passed_count": 0, "total_count": 1, "results": []}
 
     eval_type = (question.get('evaluation_type') or 'python').lower()
     expected = question.get('expected_output', '')
@@ -327,6 +283,8 @@ def evaluate(code: str, question: Dict, timeout: int = 10) -> Tuple[float, str]:
             return evaluate_web(code, expected, test_cases)
         if eval_type in ('cpp', 'c', 'java'):
             return evaluate_static_code(code, eval_type)
-        return max(70.0, min(100, 60 + len(code) // 10)), "Generic"
-    except Exception:
-        return max(70.0, min(100, 60 + len(code) // 10)), "Fallback"
+        
+        # Default/Fallback
+        return 50.0, "Generic check", {"passed_count": 1, "total_count": 1, "results": []}
+    except Exception as e:
+        return 0.0, f"Evaluation error: {str(e)}", {"passed_count": 0, "total_count": 1, "results": []}

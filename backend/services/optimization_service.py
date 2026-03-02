@@ -10,7 +10,10 @@ import numpy as np
 def _get_verified_skills_for_profile(profile):
     """Get verified skill names for a profile; fallback to skills_description keywords if none."""
     from models.student_skill import StudentSkill
-    verified = StudentSkill.query.filter_by(user_id=profile.user_id, status='verified').all()
+    verified = StudentSkill.query.filter(
+        StudentSkill.user_id == profile.user_id, 
+        StudentSkill.status.in_(['passed', 'verified'])
+    ).all()
     if verified:
         return {s.skill_name.lower().strip() for s in verified}
     return None

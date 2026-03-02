@@ -506,18 +506,18 @@ def get_recommendations():
         
         recommendations = []
 
-        # Get verified skills - only these count for recommendations (backward compat: fallback to profile)
-        verified_skills = StudentSkill.query.filter_by(user_id=user_id, status='verified').all()
+        # Mandatory Skill Verification: Only PASSED or VERIFIED skills count for recommendations
+        verified_skills = StudentSkill.query.filter(
+            StudentSkill.user_id == user_id,
+            StudentSkill.status.in_(['passed', 'verified'])
+        ).all()
         if verified_skills:
             student_skill_names = {s.skill_name.lower().strip() for s in verified_skills}
         else:
+            # If no skills are passed, the user gets no recommendations (Strict Rule)
             student_skill_names = set()
 
-        from services.nlp_service import get_nlp_service
-        nlp = get_nlp_service()
-        # Fallback: if no verified skills, use profile keywords (backward compat)
-        profile_keywords = set(nlp.extract_keywords(profile.skills_description or '', top_n=15))
-        student_skills_for_overlap = student_skill_names if student_skill_names else profile_keywords
+        student_skills_for_overlap = student_skill_names
 
         for project in projects:
             # Skip projects user has already joined
