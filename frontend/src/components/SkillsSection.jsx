@@ -1,13 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
-import { CheckCircle, AlertCircle, ClipboardList } from 'lucide-react'
-import PracticalAssessmentModal from './PracticalAssessmentModal'
+import { CheckCircle, AlertCircle, ClipboardList, Trophy } from 'lucide-react'
+import AssessmentWorkspace from './AssessmentWorkspace'
 import { useState } from 'react'
 
 const SkillsSection = () => {
   const queryClient = useQueryClient()
   const [assessingSkill, setAssessingSkill] = useState(null)
-  const [isPracticalSupported, setIsPracticalSupported] = useState(null) // null=loading, true/false
 
   const { data: skillsData } = useQuery({
     queryKey: ['my-skills'],
@@ -18,16 +17,16 @@ const SkillsSection = () => {
   })
 
   const skills = skillsData || []
-  const passedCount = skills.filter(s => s.status === 'passed' || s.status === 'verified').length
+  const passedCount = skills.filter(s => s.status === 'passed').length
   const failedCount = skills.filter(s => s.status === 'failed').length
   const unverifiedCount = skills.filter(s => s.status === 'unverified').length
 
-  const handleAssessmentComplete = (updatedSkill) => {
+  const handleAssessmentComplete = () => {
     queryClient.invalidateQueries({ queryKey: ['my-skills'] })
     queryClient.invalidateQueries({ queryKey: ['profile'] })
     queryClient.invalidateQueries({ queryKey: ['recommendations'] })
+    queryClient.invalidateQueries({ queryKey: ['total-score'] })
     setAssessingSkill(null)
-    setIsPracticalSupported(null)
   }
 
   return (
@@ -35,11 +34,11 @@ const SkillsSection = () => {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-bold text-gray-900 flex items-center">
-            <ClipboardList className="w-5 h-5 mr-2 text-primary-600" />
+            <Trophy className="w-5 h-5 mr-2 text-primary-600" />
             Skill Verification
           </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Pass practical assessments to unlock project recommendations.
+            Rebuilt Modular Assessment: Pass SQL and other practical tasks to verify skills.
           </p>
         </div>
       </div>
@@ -63,13 +62,13 @@ const SkillsSection = () => {
             )}
             <span className="flex items-center gap-1.5 text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-100">
               <AlertCircle className="w-3.5 h-3.5" />
-              {unverifiedCount} Unverified
+              {unverifiedCount} Pending
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {skills.map((skill) => {
-              const isPassed = skill.status === 'passed' || skill.status === 'verified';
+              const isPassed = skill.status === 'passed';
               const isFailed = skill.status === 'failed';
 
               return (
@@ -83,8 +82,8 @@ const SkillsSection = () => {
                   <div className="flex flex-col">
                     <span className="text-sm font-bold text-gray-800">{skill.skill_name}</span>
                     <span className="text-[10px] font-medium text-gray-400 mt-0.5">
-                      {isPassed ? `Score: ${skill.assessment_score}%` :
-                        isFailed ? 'Verification Failed' : 'Action Required'}
+                      {isPassed ? `Score: ${skill.score}%` :
+                        isFailed ? `Last Failed: ${skill.score}%` : 'Verification Required'}
                     </span>
                   </div>
 
@@ -94,20 +93,11 @@ const SkillsSection = () => {
                     </div>
                   ) : (
                     <button
-                      onClick={async () => {
-                        setAssessingSkill(skill)
-                        setIsPracticalSupported(null)
-                        try {
-                          const res = await api.get(`/skills/practical/check/${skill.id}`)
-                          setIsPracticalSupported(!!res.data?.is_supported)
-                        } catch {
-                          setIsPracticalSupported(false)
-                        }
-                      }}
+                      onClick={() => setAssessingSkill(skill)}
                       className={`px-4 py-1.5 text-xs font-bold rounded-lg transition-all ${isFailed ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' : 'bg-primary-600 text-white hover:bg-primary-700 shadow-md shadow-primary-100'
                         }`}
                     >
-                      {isFailed ? 'Retake' : 'Verify'}
+                      {isFailed ? 'Retry' : 'Verify Skill'}
                     </button>
                   )}
                 </div>
@@ -117,36 +107,12 @@ const SkillsSection = () => {
         </>
       )}
 
-      {assessingSkill && isPracticalSupported === true && (
-        <PracticalAssessmentModal
+      {assessingSkill && (
+        <AssessmentWorkspace
           skill={assessingSkill}
-          onClose={() => { setAssessingSkill(null); setIsPracticalSupported(null) }}
+          onClose={() => setAssessingSkill(null)}
           onComplete={handleAssessmentComplete}
         />
-      )}
-      {assessingSkill && isPracticalSupported === false && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl p-8 text-center max-w-sm">
-            <AlertCircle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Notice</h3>
-            <p className="text-gray-600 text-sm mb-6">
-              Practical assessment for {assessingSkill.skill_name} is currently unavailable. Please try again later.
-            </p>
-            <button
-              onClick={() => { setAssessingSkill(null); setIsPracticalSupported(null) }}
-              className="w-full py-2 bg-gray-100 text-gray-800 font-bold rounded-lg hover:bg-gray-200 transition-all"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-      {assessingSkill && isPracticalSupported === null && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-8 text-center">
-            <p className="text-gray-600">Loading assessment...</p>
-          </div>
-        </div>
       )}
     </div>
   )

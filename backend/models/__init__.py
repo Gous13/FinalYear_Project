@@ -11,11 +11,11 @@ from .analytics import SystemLog
 from .message import Message
 from .group_chat import GroupChat, GroupChatMember, GroupMessage
 from .group_chat_read_state import GroupChatReadState
-from .student_skill import StudentSkill
-from .skill_assessment import SkillAssessment, SkillAssessmentResult
-from .practical_assessment import AssessmentQuestion, AssessmentSet, AssessmentAttempt
+# New assessment models will be added here
+from .assessment_models import SkillAssessment, AssessmentQuestion, AssessmentAttempt
 from .project_task import ProjectTask
 from .team_file import TeamFile
+from .invitation import Invitation
 
 __all__ = [
     'User', 'Role',
@@ -27,7 +27,6 @@ __all__ = [
     'Message',
     'GroupChat', 'GroupChatMember', 'GroupMessage',
     'GroupChatReadState',
-    'StudentSkill', 'SkillAssessment', 'SkillAssessmentResult',
-    'AssessmentQuestion', 'AssessmentSet', 'AssessmentAttempt',
-    'ProjectTask', 'TeamFile'
+    'SkillAssessment', 'AssessmentQuestion', 'AssessmentAttempt',
+    'ProjectTask', 'TeamFile', 'Invitation'
 ]

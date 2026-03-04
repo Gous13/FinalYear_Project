@@ -1,28 +1,20 @@
 """
-Skill assessment routes for student skill verification.
-- MCQ assessment (legacy): /assessment/<skill_name>, /assess/<student_skill_id>
-- Practical assessment: /practical/start/<student_skill_id>, /practical/submit
+Skill assessment routes for student skill verification - REBUILT.
 """
 
-import json
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
-from models.student_skill import StudentSkill
-from models.skill_assessment import SkillAssessment, SkillAssessmentResult
 from utils.decorators import student_required
-from services.skill_assessment_service import (
-    resolve_assessment_skill,
-    start_assessment,
-    submit_assessment,
-    run_assessment,
-)
+from datetime import datetime
 
 skills_bp = Blueprint('skills', __name__)
 
-PASSING_THRESHOLD = 70.0  # Configurable passing score percentage (MCQ)
-
+from models.assessment_models import SkillAssessment, AssessmentQuestion, AssessmentAttempt
+from services.sql_evaluator import evaluate_sql
+from services.code_evaluator import evaluate_code
+import random
 
 @skills_bp.route('/add', methods=['POST'])
 @jwt_required()
@@ -36,14 +28,14 @@ def add_skill():
         if not skill_name:
             return jsonify({'error': 'skill_name is required'}), 400
 
-        existing = StudentSkill.query.filter_by(user_id=user_id, skill_name=skill_name).first()
+        existing = SkillAssessment.query.filter_by(user_id=user_id, skill_name=skill_name).first()
         if existing:
             return jsonify({
                 'message': 'Skill already exists',
                 'skill': existing.to_dict()
             }), 200
 
-        skill = StudentSkill(user_id=user_id, skill_name=skill_name, status='unverified')
+        skill = SkillAssessment(user_id=user_id, skill_name=skill_name, status='unverified', score=0)
         db.session.add(skill)
         db.session.commit()
         return jsonify({
@@ -54,7 +46,6 @@ def add_skill():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
-
 @skills_bp.route('/my-skills', methods=['GET'])
 @jwt_required()
 @student_required
@@ -62,110 +53,197 @@ def get_my_skills():
     """List current user's skills with status"""
     try:
         user_id = int(get_jwt_identity())
-        skills = StudentSkill.query.filter_by(user_id=user_id).order_by(StudentSkill.skill_name).all()
+        skills = SkillAssessment.query.filter_by(user_id=user_id).order_by(SkillAssessment.skill_name).all()
         return jsonify({
             'skills': [s.to_dict() for s in skills]
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @skills_bp.route('/assessment/<skill_name>', methods=['GET'])
 @jwt_required()
 @student_required
 def get_assessment(skill_name):
-    """Get MCQ assessment questions for a skill"""
+    """Get assessment questions for a skill (SQL focus for now)"""
     try:
         skill_name = skill_name.strip()
-        questions = SkillAssessment.query.filter_by(skill_name=skill_name).limit(8).all()
+        skill_lower = skill_lower = skill_name.lower()
+        
+        # Determine if it's a SQL or general coding assessment
+        is_sql = skill_lower in ['sql', 'sqlite', 'mysql', 'postgresql']
+        is_coding = skill_lower in ['python', 'java', 'c', 'c++', 'cpp', 'javascript', 'js']
+        
+        if not is_sql and not is_coding:
+            return jsonify({'error': f'Assessment logic for {skill_name} not yet implemented'}), 501
+            
+        target_skill_for_questions = 'SQL' if is_sql else 'CODING'
+            
+        # Find the SkillAssessment record for this user and skill (e.g. "Python")
+        user_id = int(get_jwt_identity())
+        sa = SkillAssessment.query.filter_by(user_id=user_id, skill_name=skill_name).first()
+        if not sa:
+            sa = SkillAssessment(user_id=user_id, skill_name=skill_name, status='unverified', score=0)
+            db.session.add(sa)
+            db.session.flush()
+
+        # Randomly assign a set ID (from the CODING or SQL questions)
+        if sa.assigned_set_id is None:
+            available_sets = db.session.query(AssessmentQuestion.set_id).filter_by(skill_name=target_skill_for_questions).distinct().all()
+            if available_sets:
+                set_ids = [s[0] for s in available_sets if s[0] is not None]
+                if set_ids:
+                    sa.assigned_set_id = random.choice(set_ids)
+                    db.session.commit()
+            
+        if sa.assigned_set_id is None:
+            return jsonify({'error': f'No assessment questions available for {skill_name} currently'}), 404
+
+        # Fetch questions for the assigned set
+        questions = AssessmentQuestion.query.filter_by(
+            skill_name=target_skill_for_questions, 
+            set_id=sa.assigned_set_id
+        ).all()
+        
         if not questions:
-            return jsonify({'error': f'No assessment available for skill: {skill_name}'}), 404
-        # Return questions without correct_option (for security)
-        result = []
-        for q in questions:
-            result.append({
-                'id': q.id,
-                'skill_name': q.skill_name,
-                'question_text': q.question_text,
-                'option_a': q.option_a,
-                'option_b': q.option_b,
-                'option_c': q.option_c,
-                'option_d': q.option_d,
-            })
-        return jsonify({'questions': result}), 200
+            return jsonify({'error': 'Assessment questions not found for the assigned set'}), 404
+            
+        # Ensure it returns [Easy, Hard]
+        easy_q = next((q for q in questions if q.difficulty == 'easy'), None)
+        hard_q = next((q for q in questions if q.difficulty == 'hard'), None)
+        
+        returned_questions = []
+        if easy_q: returned_questions.append(easy_q.to_dict())
+        if hard_q: returned_questions.append(hard_q.to_dict())
+
+        return jsonify({
+            'questions': returned_questions,
+            'set_id': sa.assigned_set_id,
+            'is_sql': is_sql,
+            'is_coding': is_coding
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
-@skills_bp.route('/assess/<int:student_skill_id>', methods=['POST'])
+@skills_bp.route('/run', methods=['POST'])
 @jwt_required()
 @student_required
-def submit_mcq_assessment(student_skill_id):
-    """Submit assessment answers and get result"""
+def run_code():
+    """Run code against sample tests (does NOT update status)"""
+    try:
+        data = request.get_json()
+        code = data.get('code')
+        question_id = data.get('question_id')
+        language = data.get('language', 'python') # Default to python if not specified
+        
+        question = AssessmentQuestion.query.get(question_id)
+        if not question:
+            return jsonify({'error': 'Question not found'}), 404
+            
+        import json
+        all_cases = json.loads(question.test_cases_json)
+        sample_cases = [tc for tc in all_cases if tc.get('is_sample')]
+        
+        # Dispatch to appropriate evaluator
+        if question.skill_name == 'SQL':
+            result = evaluate_sql(code, question.schema_details, json.dumps(sample_cases))
+        else:
+            # Mapping 'CODING' questions to the selected language
+            result = evaluate_code(language, code, json.dumps(sample_cases))
+            
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@skills_bp.route('/submit', methods=['POST'])
+@jwt_required()
+@student_required
+def submit_assessment():
+    """Submit all answers for a skill verification and update status"""
     try:
         user_id = int(get_jwt_identity())
-        student_skill = StudentSkill.query.get(student_skill_id)
-        if not student_skill or student_skill.user_id != user_id:
-            return jsonify({'error': 'Skill not found'}), 404
-
         data = request.get_json()
-        answers = data.get('answers')  # {question_id: 'a'|'b'|'c'|'d'}
-        if not isinstance(answers, dict):
-            return jsonify({'error': 'answers must be an object mapping question_id to option'}), 400
+        answers = data.get('answers', {}) # Map of question_id to code
+        skill_assessment_id = data.get('skill_assessment_id')
+        language = data.get('language', 'python')
+        
+        sa = SkillAssessment.query.get(skill_assessment_id)
+        if not sa or sa.user_id != user_id:
+            return jsonify({'error': 'Invalid assessment record'}), 404
+            
+        if not sa.assigned_set_id:
+             return jsonify({'error': 'No set assigned to this assessment. Please restart.'}), 400
+             
+        # Determine question set skill (SQL or CODING)
+        skill_lower = sa.skill_name.lower()
+        is_sql = skill_lower in ['sql', 'sqlite', 'mysql', 'postgresql']
+        target_skill = 'SQL' if is_sql else 'CODING'
 
-        q_ids = []
-        for k in answers.keys():
-            try:
-                q_ids.append(int(k))
-            except (ValueError, TypeError):
-                pass
-        if not q_ids:
-            return jsonify({'error': 'No valid question IDs'}), 400
-
-        questions = SkillAssessment.query.filter(
-            SkillAssessment.id.in_(q_ids),
-            SkillAssessment.skill_name == student_skill.skill_name
+        questions = AssessmentQuestion.query.filter_by(
+            skill_name=target_skill, 
+            set_id=sa.assigned_set_id
         ).all()
+        
         if not questions:
-            return jsonify({'error': 'No valid questions found'}), 400
-
-        correct = 0
-        total = len(questions)
+            return jsonify({'error': 'No questions found for the assigned set'}), 404
+            
+        total_points = 0
+        max_points = 0
+        all_results = {}
+        
         for q in questions:
-            sid = str(q.id)
-            if sid in answers and answers[sid].lower() in ['a', 'b', 'c', 'd']:
-                if answers[sid].lower() == q.correct_option.lower():
-                    correct += 1
+            user_code = answers.get(str(q.id)) or answers.get(q.id) or ""
+            
+            # Point calculation: Easy = 40, Hard = 60
+            points_for_this_q = 60 if q.difficulty == 'hard' else 40
+            max_points += points_for_this_q
 
-        score = (correct / total * 100) if total > 0 else 0
-        passed = score >= PASSING_THRESHOLD
-
-        result = SkillAssessmentResult(
-            student_skill_id=student_skill_id,
-            answers=json.dumps(answers),
-            score=score,
-            passed=passed
-        )
-        db.session.add(result)
-
-        if passed:
-            from datetime import datetime
-            student_skill.status = 'verified'
-            student_skill.assessment_score = score
-            student_skill.assessed_at = datetime.utcnow()
+            # Evaluate this question
+            if is_sql:
+                result = evaluate_sql(user_code, q.schema_details, q.test_cases_json)
+            else:
+                result = evaluate_code(language, user_code, q.test_cases_json)
+            
+            # Weighted score based on test cases passed
+            # Actually, per requirement 12 & 13, maybe we just use the evaluator score * weighting
+            # "Easy problem = 40 points, Hard problem = 60 points"
+            # We'll award points proportional to test cases passed
+            q_score_fraction = (result['passed_count'] / result['total_count']) if result['total_count'] > 0 else 0
+            earned_points = points_for_this_q * q_score_fraction
+            total_points += earned_points
+            
+            all_results[q.id] = result
+            
+            # Store per-question attempt
+            attempt = AssessmentAttempt(
+                user_id=user_id,
+                skill_name=sa.skill_name,
+                question_id=q.id,
+                score=int(result['score']),
+                passed=result['score'] >= 60
+            )
+            db.session.add(attempt)
+            
+        # Final cumulative score
+        final_score = int(round(total_points))
+        passed_assessment = final_score >= 60
+        
+        # Update skill assessment
+        sa.score = final_score
+        sa.status = 'passed' if passed_assessment else 'failed'
+        sa.last_attempted_at = datetime.utcnow()
+        
         db.session.commit()
-
+        
         return jsonify({
-            'score': round(score, 1),
-            'passed': passed,
-            'correct': correct,
-            'total': total,
-            'skill': student_skill.to_dict()
+            'score': final_score,
+            'passed': passed_assessment,
+            'questions_evaluated': len(all_results),
+            'skill': sa.to_dict()
         }), 200
+        
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
-
 
 @skills_bp.route('/verified-only', methods=['GET'])
 @jwt_required()
@@ -174,107 +252,9 @@ def get_verified_skills():
     """Get only verified skills for current user (used internally by matching)"""
     try:
         user_id = int(get_jwt_identity())
-        skills = StudentSkill.query.filter_by(user_id=user_id, status='verified').all()
+        skills = SkillAssessment.query.filter_by(user_id=user_id, status='passed').all()
         return jsonify({
-            'skills': [{'skill_name': s.skill_name, 'score': s.assessment_score} for s in skills]
+            'skills': [{'skill_name': s.skill_name, 'score': s.score} for s in skills]
         }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-# ----- Practical Assessment (dynamic, code-based) -----
-
-@skills_bp.route('/practical/check/<int:student_skill_id>', methods=['GET'])
-@jwt_required()
-@student_required
-def check_practical_available(student_skill_id):
-    """Check if practical assessment is available for this skill"""
-    try:
-        user_id = int(get_jwt_identity())
-        student_skill = StudentSkill.query.get(student_skill_id)
-        if not student_skill or student_skill.user_id != user_id:
-            return jsonify({'error': 'Skill not found'}), 404
-        from services.skill_assessment_service import resolve_assessment_skill, can_start_assessment
-        is_supported = resolve_assessment_skill(student_skill.skill_name) is not None
-        can_start, msg = can_start_assessment(user_id, student_skill) if is_supported else (False, "Not supported")
-        
-        return jsonify({
-            'available': is_supported and can_start,
-            'is_supported': is_supported,
-            'message': msg,
-            'skill_name': student_skill.skill_name,
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@skills_bp.route('/practical/start/<int:student_skill_id>', methods=['POST'])
-@jwt_required()
-@student_required
-def start_practical(student_skill_id):
-    """Start practical assessment - returns random question set (1 easy + 1 hard)"""
-    try:
-        user_id = int(get_jwt_identity())
-        student_skill = StudentSkill.query.get(student_skill_id)
-        if not student_skill or student_skill.user_id != user_id:
-            return jsonify({'error': 'Skill not found'}), 404
-        result = start_assessment(user_id, student_skill)
-        if 'error' in result:
-            return jsonify({'error': result['error']}), 400
-        return jsonify(result), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@skills_bp.route('/practical/submit', methods=['POST'])
-@jwt_required()
-@student_required
-def submit_practical():
-    """Submit practical assessment answers and get score"""
-    try:
-        user_id = int(get_jwt_identity())
-        data = request.get_json(silent=True) or {}
-        
-        student_skill_id = data.get('student_skill_id')
-        set_id = data.get('set_id')
-        answers = data.get('answers') or {}
-
-        if not student_skill_id or not set_id:
-            return jsonify({'error': 'Missing student_skill_id or set_id'}), 400
-
-        timeout = getattr(current_app.config, 'ASSESSMENT_TIMEOUT_SECONDS', 30)
-        result = submit_assessment(user_id, int(student_skill_id), int(set_id), answers, timeout=timeout)
-        
-        if 'error' in result:
-            return jsonify({'error': result['error']}), 400
-
-        return jsonify(result), 200
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-
-@skills_bp.route('/practical/run', methods=['POST'])
-@jwt_required()
-@student_required
-def run_practical():
-    """Run code against sample tests (Sandbox)"""
-    try:
-        user_id = int(get_jwt_identity())
-        data = request.get_json(silent=True) or {}
-        
-        student_skill_id = data.get('student_skill_id')
-        question_id = data.get('question_id')
-        code = data.get('code')
-        
-        if not all([student_skill_id, question_id, code]):
-            return jsonify({'error': 'Missing required fields'}), 400
-            
-        result = run_assessment(user_id, student_skill_id, question_id, code)
-        
-        if 'error' in result:
-            return jsonify({'error': result['error']}), 400
-            
-        return jsonify(result), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

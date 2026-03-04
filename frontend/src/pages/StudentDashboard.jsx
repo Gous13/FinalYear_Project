@@ -6,9 +6,9 @@ import Layout from '../components/Layout'
 import SkillsInput from '../components/SkillsInput'
 import SkillsSection from '../components/SkillsSection'
 import toast from 'react-hot-toast'
-import { 
-  User, Plus, Search, Sparkles, Users, Briefcase, 
-  TrendingUp, Info, CheckCircle, XCircle 
+import {
+  User, Plus, Search, Sparkles, Users, Briefcase,
+  TrendingUp, Info, CheckCircle, XCircle
 } from 'lucide-react'
 
 const AVAILABILITY_OPTIONS = [
@@ -105,6 +105,16 @@ const StudentDashboard = () => {
     }
   })
 
+  // Fetch invitations
+  const { data: invitations, isLoading: invLoading } = useQuery({
+    queryKey: ['invitations', user?.id],
+    queryFn: async () => {
+      const res = await api.get('/invitations/student/my-invitations')
+      return res.data.invitations || []
+    },
+    enabled: !!user?.id
+  })
+
   useEffect(() => {
     if (profile) {
       setProfileData({
@@ -129,6 +139,20 @@ const StudentDashboard = () => {
     }
     profileMutation.mutate(profileData)
   }
+
+  const invitationMutation = useMutation({
+    mutationFn: async ({ id, action }) => {
+      return api.post(`/invitations/respond/${id}`, { action })
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries(['invitations'])
+      queryClient.invalidateQueries(['teams'])
+      toast.success(`Invitation ${variables.action}ed!`)
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.error || 'Failed to respond to invitation')
+    }
+  })
 
   return (
     <Layout>
@@ -173,7 +197,10 @@ const StudentDashboard = () => {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">Recommendations</p>
-                <p className="text-2xl font-bold text-gray-900">{recommendations?.length || 0}</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {((recommendations?.filter(rec => !rejectedProjects.includes(rec.project.id)).length || 0) +
+                    (invitations?.filter(inv => inv.status === 'pending').length || 0))}
+                </p>
               </div>
             </div>
           </div>
@@ -207,7 +234,7 @@ const StudentDashboard = () => {
                   </label>
                   <SkillsInput
                     value={profileData.skills_description}
-                    onChange={(val) => setProfileData({...profileData, skills_description: val})}
+                    onChange={(val) => setProfileData({ ...profileData, skills_description: val })}
                     placeholder="Type to search (e.g., sql, react, python)..."
                   />
                   <p className="text-xs text-gray-500 mt-1">Type a skill to see related suggestions from all domains</p>
@@ -218,7 +245,7 @@ const StudentDashboard = () => {
                   </label>
                   <textarea
                     value={profileData.interests_description}
-                    onChange={(e) => setProfileData({...profileData, interests_description: e.target.value})}
+                    onChange={(e) => setProfileData({ ...profileData, interests_description: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     rows="2"
                     placeholder="e.g., AI, Web Development, Data Science"
@@ -230,7 +257,7 @@ const StudentDashboard = () => {
                   </label>
                   <textarea
                     value={profileData.experience_description}
-                    onChange={(e) => setProfileData({...profileData, experience_description: e.target.value})}
+                    onChange={(e) => setProfileData({ ...profileData, experience_description: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     rows="2"
                     placeholder="e.g., 2 years of web development, 1 hackathon win"
@@ -242,7 +269,7 @@ const StudentDashboard = () => {
                   </label>
                   <select
                     value={profileData.availability_description}
-                    onChange={(e) => setProfileData({...profileData, availability_description: e.target.value})}
+                    onChange={(e) => setProfileData({ ...profileData, availability_description: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                   >
                     {(() => {
@@ -272,7 +299,7 @@ const StudentDashboard = () => {
                       min="1"
                       max="4"
                       value={profileData.year_of_study}
-                      onChange={(e) => setProfileData({...profileData, year_of_study: e.target.value})}
+                      onChange={(e) => setProfileData({ ...profileData, year_of_study: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
@@ -280,7 +307,7 @@ const StudentDashboard = () => {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
                     <select
                       value={profileData.department}
-                      onChange={(e) => setProfileData({...profileData, department: e.target.value})}
+                      onChange={(e) => setProfileData({ ...profileData, department: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     >
                       <option value="">Select department</option>
@@ -300,7 +327,7 @@ const StudentDashboard = () => {
                       min="0"
                       max="10"
                       value={profileData.gpa}
-                      onChange={(e) => setProfileData({...profileData, gpa: e.target.value})}
+                      onChange={(e) => setProfileData({ ...profileData, gpa: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
@@ -337,33 +364,76 @@ const StudentDashboard = () => {
               AI Recommendations
             </h2>
           </div>
-          {recLoading ? (
+          {(recLoading || invLoading) ? (
             <div className="text-center py-8">Loading recommendations...</div>
-          ) : recommendations?.length > 0 ? (
-            <div className="space-y-4">
-              {recommendations
-                .filter(rec => !rejectedProjects.includes(rec.project.id))
-                .slice(0, 5)
-                .map((rec) => (
-                  <ProjectCard 
-                    key={rec.project.id} 
-                    recommendation={rec}
-                    onReject={(projectId) => {
-                      setRejectedProjects(prev => {
-                        const updated = [...prev, projectId]
-                        const key = user?.id ? `rejectedProjects_${user.id}` : 'rejectedProjects'
-                        localStorage.setItem(key, JSON.stringify(updated))
-                        return updated
-                      })
-                    }}
-                  />
-                ))}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-gray-500">
-              No recommendations available. Complete your profile to get matches!
-            </div>
-          )}
+          ) : (() => {
+            const pendingInvites = invitations?.filter(inv => inv.status === 'pending') || []
+            const displayRecs = recommendations?.filter(rec => !rejectedProjects.includes(rec.project.id)) || []
+
+            if (pendingInvites.length > 0 || displayRecs.length > 0) {
+              return (
+                <div className="space-y-4">
+                  {/* Show Invitations First */}
+                  {pendingInvites.map((inv) => (
+                    <div key={`inv-${inv.id}`} className="border-2 border-primary-200 bg-primary-50 rounded-lg p-4 shadow-sm">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-bold text-gray-900 line-clamp-1">{inv.project_title}</h3>
+                            <span className="px-2 py-0.5 bg-primary-600 text-white text-[10px] uppercase font-bold rounded-full">New Invite</span>
+                          </div>
+                          <p className="text-sm text-gray-700 mt-1">
+                            Mentor <span className="font-semibold">{inv.mentor_name}</span> has invited you to join this project!
+                          </p>
+                          <p className="text-xs text-gray-500 mt-2">
+                            Required Skills: <span className="font-medium text-primary-700">{inv.project_required_skills || 'Not specified'}</span>
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-2 ml-4">
+                          <button
+                            onClick={() => invitationMutation.mutate({ id: inv.id, action: 'accept' })}
+                            disabled={invitationMutation.isLoading}
+                            className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-bold shadow-sm"
+                          >
+                            Accept
+                          </button>
+                          <button
+                            onClick={() => invitationMutation.mutate({ id: inv.id, action: 'reject' })}
+                            disabled={invitationMutation.isLoading}
+                            className="px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-md hover:bg-gray-50 text-sm font-bold"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Show Regular Recommendations */}
+                  {displayRecs.slice(0, 5).map((rec) => (
+                    <ProjectCard
+                      key={rec.project.id}
+                      recommendation={rec}
+                      onReject={(projectId) => {
+                        setRejectedProjects(prev => {
+                          const updated = [...prev, projectId]
+                          const key = user?.id ? `rejectedProjects_${user.id}` : 'rejectedProjects'
+                          localStorage.setItem(key, JSON.stringify(updated))
+                          return updated
+                        })
+                      }}
+                    />
+                  ))}
+                </div>
+              )
+            } else {
+              return (
+                <div className="text-center py-8 text-gray-500">
+                  No recommendations available. Complete your profile or verify more skills to get matches!
+                </div>
+              )
+            }
+          })()}
         </div>
 
         {/* My Teams */}
@@ -420,14 +490,14 @@ const ProjectCard = ({ recommendation, onReject }) => {
       if (!similarity_id) {
         await api.post(`/matching/compute-similarities/${project.id}`)
       }
-      
+
       // Create or join a team for this project
       const res = await api.post('/teams', {
         name: `${project.title} - My Team`,
         project_id: project.id,
         description: `Team for ${project.title}`
       })
-      
+
       toast.success('Successfully joined the project!')
       queryClient.invalidateQueries(['teams'])
       queryClient.invalidateQueries({ queryKey: ['recommendations'] })

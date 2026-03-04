@@ -10,7 +10,7 @@ from models.profile import StudentProfile
 from models.project import Project, Hackathon
 from models.team import Team, TeamMember
 from models.matching import SimilarityScore, MatchExplanation
-from models.student_skill import StudentSkill
+from models.assessment_models import SkillAssessment
 from services.nlp_service import get_nlp_service
 from services.optimization_service import OptimizationService
 from services.explanation_service import ExplanationService
@@ -221,11 +221,14 @@ def compute_similarities(project_id):
         if not project:
             return jsonify({'error': 'Project not found'}), 404
         
-        # Get all student profiles
-        profiles = StudentProfile.query.all()
+        # Get all student profiles that have at least one passed skill
+        # Recruiter Rule: Don't suggest unverified candidates to mentors
+        profiles = StudentProfile.query.join(User).join(SkillAssessment, SkillAssessment.user_id == User.id).filter(
+            SkillAssessment.status.in_(['passed', 'verified'])
+        ).distinct().all()
         
         if not profiles:
-            return jsonify({'error': 'No student profiles found'}), 404
+            return jsonify({'error': 'No verified student profiles found for matching.'}), 404
         
         # Get project embedding
         project_embedding = json.loads(project.description_embedding) if project.description_embedding else None
@@ -309,11 +312,13 @@ def form_teams(project_id):
         data = request.get_json(silent=True) or {}
         constraints = data.get('constraints', {})
         
-        # Get all student profiles
-        profiles = StudentProfile.query.all()
+        # Get all student profiles that have at least one passed skill
+        profiles = StudentProfile.query.join(User).join(SkillAssessment, SkillAssessment.user_id == User.id).filter(
+            SkillAssessment.status.in_(['passed', 'verified'])
+        ).distinct().all()
         
         if len(profiles) < project.min_team_size:
-            return jsonify({'error': f'Not enough students (need at least {project.min_team_size})'}), 400
+            return jsonify({'error': f'Not enough verified students (need at least {project.min_team_size})'}), 400
         
         # Get similarity scores
         similarity_scores = {}
@@ -491,52 +496,58 @@ def get_recommendations():
         if not profile:
             return jsonify({'error': 'Profile not found. Please create a profile first.'}), 404
         
-        # Get all open projects
-        projects = Project.query.filter_by(status='open').all()
+        # Get all open projects (case-insensitive)
+        from sqlalchemy import func
+        projects = Project.query.filter(Project.status.ilike('open')).all()
         
-        # Get project IDs where user is already in a team
-        user_teams = Team.query.join(TeamMember).filter(TeamMember.user_id == user_id).all()
-        joined_project_ids = set()
-        for team in user_teams:
-            if team.project_id:
-                joined_project_ids.add(team.project_id)
-            if team.hackathon_id:
-                # For hackathons, we could also exclude them if needed
-                pass
+        # Get project IDs where user is already in an ACTIVE team
+        from models.team import Team, TeamMember
+        active_memberships = TeamMember.query.filter(
+            TeamMember.user_id == user_id,
+            TeamMember.status == 'active'
+        ).all()
+        joined_project_ids = {Team.query.get(m.team_id).project_id for m in active_memberships if Team.query.get(m.team_id) and Team.query.get(m.team_id).project_id}
         
         recommendations = []
 
         # Mandatory Skill Verification: Only PASSED or VERIFIED skills count for recommendations
-        verified_skills = StudentSkill.query.filter(
-            StudentSkill.user_id == user_id,
-            StudentSkill.status.in_(['passed', 'verified'])
+        verified_skills = SkillAssessment.query.filter(
+            SkillAssessment.user_id == user_id,
+            func.lower(SkillAssessment.status).in_(['passed', 'verified'])
         ).all()
-        if verified_skills:
-            student_skill_names = {s.skill_name.lower().strip() for s in verified_skills}
-        else:
-            # If no skills are passed, the user gets no recommendations (Strict Rule)
-            student_skill_names = set()
-
-        student_skills_for_overlap = student_skill_names
-
+        
+        student_skill_names = {s.skill_name.lower().strip() for s in verified_skills}
+        import re
+        
         for project in projects:
             # Skip projects user has already joined
             if project.id in joined_project_ids:
                 continue
             
-            # Extract project required skills
-            project_skills = set(nlp.extract_keywords(project.required_skills or project.description or '', top_n=15))
-            project_skills_lower = {s.lower() for s in project_skills}
-
-            # Check skill overlap - use verified skills (or profile fallback)
+            # Extract project metadata for matching
+            project_title = (project.title or '').lower()
+            project_required = (project.required_skills or '').lower()
+            project_desc = (project.description or '').lower()
+            project_search_text = f"{project_title} {project_required} {project_desc}"
+            project_search_tokens = set(re.findall(r'\b\w+\b', project_search_text))
+            
+            # Check skill overlap - robust token-based matching
             skill_overlap = set()
-            for sk in student_skills_for_overlap:
-                sk_str = sk.lower() if isinstance(sk, str) else str(sk).lower()
-                tokens = sk_str.replace('-', ' ').split()
-                if any(t in project_skills_lower or any(t in p or p in t for p in project_skills_lower) for t in tokens):
-                    skill_overlap.add(sk)
+            for sk in student_skill_names:
+                sk_tokens = set(re.findall(r'\b\w+\b', sk))
+                if not sk_tokens: continue
+                
+                if len(sk) < 4:
+                    # For short skills (SQL, Java, C++), require an exact token match
+                    if sk_tokens & project_search_tokens:
+                        skill_overlap.add(sk)
+                else:
+                    # For longer skills (Data Science, Python Programming), allow substring or token match
+                    if sk in project_search_text or (sk_tokens & project_search_tokens):
+                        skill_overlap.add(sk)
+
+            # Strict Rule: If project has REQUIRED skills, user MUST have at least one match
             if not skill_overlap and project.required_skills:
-                # No skill overlap, skip this project
                 continue
             
             # Get or compute similarity
@@ -546,35 +557,29 @@ def get_recommendations():
             ).first()
             
             if not similarity:
-                # Compute on the fly
+                # Compute on the fly if missing
                 project_embedding = json.loads(project.description_embedding) if project.description_embedding else None
                 profile_embedding = json.loads(profile.skills_embedding) if profile.skills_embedding else None
                 
                 if project_embedding and profile_embedding:
                     overall_sim = nlp_service.compute_similarity(project_embedding, profile_embedding)
                 else:
-                    # If no embeddings, use skill overlap as similarity
-                    if skill_overlap:
-                        overall_sim = min(0.7, len(skill_overlap) / max(len(project_skills), 1))
-                    else:
-                        overall_sim = 0.3
+                    # Fallback similarity based on overlap
+                    overall_sim = min(0.7, 0.4 + (len(skill_overlap) * 0.1)) if skill_overlap else 0.3
                 
-                # Store the computed similarity for future use
+                # Store the computed similarity
                 similarity = SimilarityScore(
                     profile_id=profile.id,
                     project_id=project.id,
                     overall_similarity=overall_sim
                 )
                 db.session.add(similarity)
-                db.session.flush()  # Flush to get the ID
+                db.session.flush()
             else:
                 overall_sim = similarity.overall_similarity
             
-            # Only recommend if similarity is above threshold (0.5 = 50% match)
-            # AND has at least some skill overlap
-            # This ensures only relevant projects with matching skills are shown
-            min_skill_overlap = 1  # At least 1 matching skill required
-            if overall_sim < 0.5 or len(skill_overlap) < min_skill_overlap:
+            # Priority Rule: If they have a verified skill match, don't skip due to NLP score
+            if overall_sim < 0.5 and len(skill_overlap) < 1:
                 continue
             
             recommendations.append({
@@ -582,13 +587,10 @@ def get_recommendations():
                 'similarity': overall_sim,
                 'similarity_id': similarity.id,
                 'skill_overlap_count': len(skill_overlap),
-                'matching_skills': list(skill_overlap)[:10]  # Top 10 matching skills
+                'matching_skills': list(skill_overlap)[:10]
             })
         
-        # Commit all new similarity scores
         db.session.commit()
-        
-        # Sort by similarity (highest first)
         recommendations.sort(key=lambda x: x['similarity'], reverse=True)
         
         return jsonify({

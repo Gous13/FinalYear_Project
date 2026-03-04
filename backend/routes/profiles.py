@@ -7,7 +7,8 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from extensions import db
 from models.user import User
 from models.profile import StudentProfile
-from models.student_skill import StudentSkill
+from models.assessment_models import SkillAssessment
+
 from services.nlp_service import get_nlp_service
 
 profiles_bp = Blueprint('profiles', __name__)
@@ -20,9 +21,9 @@ def _sync_skills_to_student_skills(user_id, skills_description):
         return
     skills = [s.strip() for s in skills_description.split(',') if s.strip()]
     for name in skills:
-        existing = StudentSkill.query.filter_by(user_id=user_id, skill_name=name).first()
+        existing = SkillAssessment.query.filter_by(user_id=user_id, skill_name=name).first()
         if not existing:
-            sk = StudentSkill(user_id=user_id, skill_name=name, status='unverified')
+            sk = SkillAssessment(user_id=user_id, skill_name=name, status='unverified', score=0)
             db.session.add(sk)
 
 @profiles_bp.route('', methods=['POST'])
@@ -104,6 +105,18 @@ def create_profile():
         
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@profiles_bp.route('/total-score', methods=['GET'])
+@jwt_required()
+def get_total_score():
+    """Get summarized assessment score for the student"""
+    try:
+        user_id = int(get_jwt_identity())
+        from models.assessment_models import SkillAssessment
+        total_score = SkillAssessment.get_total_verified_score(user_id)
+        return jsonify({'total_score': total_score}), 200
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @profiles_bp.route('', methods=['GET'])

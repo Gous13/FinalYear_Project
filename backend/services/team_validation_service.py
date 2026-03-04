@@ -4,7 +4,7 @@ Team skill validation - verifies team collectively covers project required skill
 
 from models.project import Project
 from models.team import Team, TeamMember
-from models.student_skill import StudentSkill
+from models.assessment_models import SkillAssessment
 from models.profile import StudentProfile
 from services.nlp_service import get_nlp_service
 
@@ -59,7 +59,7 @@ def validate_team_skills(team_id):
     member_skills = {}
     for member in team.members or []:
         user_id = member.user_id
-        verified = StudentSkill.query.filter_by(user_id=user_id, status='verified').all()
+        verified = SkillAssessment.query.filter_by(user_id=user_id, status='passed').all()
         member_skills[user_id] = [
             {'skill_name': s.skill_name, 'score': s.assessment_score or 0}
             for s in verified

@@ -4,9 +4,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../services/api'
 import Layout from '../components/Layout'
 import toast from 'react-hot-toast'
-import { 
-  Plus, Briefcase, Users, Sparkles, Settings, 
-  CheckCircle, XCircle, Play, Eye, UsersRound 
+import {
+  Plus, Briefcase, Users, Sparkles, Settings,
+  CheckCircle, XCircle, Play, Eye, UsersRound
 } from 'lucide-react'
 
 const MentorDashboard = () => {
@@ -136,7 +136,7 @@ const MentorDashboard = () => {
                   <input
                     type="text"
                     value={projectData.title}
-                    onChange={(e) => setProjectData({...projectData, title: e.target.value})}
+                    onChange={(e) => setProjectData({ ...projectData, title: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     required
                   />
@@ -147,7 +147,7 @@ const MentorDashboard = () => {
                   </label>
                   <textarea
                     value={projectData.description}
-                    onChange={(e) => setProjectData({...projectData, description: e.target.value})}
+                    onChange={(e) => setProjectData({ ...projectData, description: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     rows="4"
                     required
@@ -159,7 +159,7 @@ const MentorDashboard = () => {
                   </label>
                   <textarea
                     value={projectData.required_skills}
-                    onChange={(e) => setProjectData({...projectData, required_skills: e.target.value})}
+                    onChange={(e) => setProjectData({ ...projectData, required_skills: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     rows="2"
                     placeholder="e.g., Python, React, Machine Learning"
@@ -173,7 +173,7 @@ const MentorDashboard = () => {
                       min="2"
                       max="10"
                       value={projectData.min_team_size}
-                      onChange={(e) => setProjectData({...projectData, min_team_size: parseInt(e.target.value)})}
+                      onChange={(e) => setProjectData({ ...projectData, min_team_size: parseInt(e.target.value) })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
@@ -184,7 +184,7 @@ const MentorDashboard = () => {
                       min="2"
                       max="10"
                       value={projectData.max_team_size}
-                      onChange={(e) => setProjectData({...projectData, max_team_size: parseInt(e.target.value)})}
+                      onChange={(e) => setProjectData({ ...projectData, max_team_size: parseInt(e.target.value) })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
@@ -195,7 +195,7 @@ const MentorDashboard = () => {
                       min="2"
                       max="10"
                       value={projectData.preferred_team_size}
-                      onChange={(e) => setProjectData({...projectData, preferred_team_size: parseInt(e.target.value)})}
+                      onChange={(e) => setProjectData({ ...projectData, preferred_team_size: parseInt(e.target.value) })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                     />
                   </div>
@@ -205,7 +205,7 @@ const MentorDashboard = () => {
                   <input
                     type="datetime-local"
                     value={projectData.deadline}
-                    onChange={(e) => setProjectData({...projectData, deadline: e.target.value})}
+                    onChange={(e) => setProjectData({ ...projectData, deadline: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500"
                   />
                 </div>
@@ -255,25 +255,61 @@ const MentorDashboard = () => {
 }
 
 const ProjectCard = ({ project, navigate }) => {
+  const queryClient = useQueryClient()
+  const [showRecs, setShowRecs] = useState(false)
+  const { data: recs, isLoading: recsLoading } = useQuery({
+    queryKey: ['recommendations', project.id],
+    queryFn: async () => {
+      const res = await api.get(`/invitations/recommendations/${project.id}`)
+      return res.data.recommendations || []
+    },
+    enabled: showRecs
+  })
+
+  const inviteMutation = useMutation({
+    mutationFn: async (studentId) => {
+      return api.post('/invitations/invite', {
+        project_id: project.id,
+        student_id: studentId
+      })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['recommendations', project.id])
+      toast.success('Invitation sent!')
+    },
+    onError: (error) => {
+      toast.error(error.response?.data?.error || 'Failed to send invite')
+    }
+  })
+
   // Count total students who have joined this project
   const totalJoined = project.teams?.reduce((sum, team) => sum + (team.member_count || 0), 0) || 0
-  
+
   return (
     <div className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h3 className="text-lg font-semibold text-gray-900">{project.title}</h3>
-            {totalJoined > 0 && (
+            <div className="flex gap-2">
+              {totalJoined > 0 && (
+                <button
+                  onClick={() => navigate(`/project/${project.id}/workspace`)}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-sm text-primary-600 hover:bg-primary-50 rounded transition-colors"
+                  title="View team members"
+                >
+                  <UsersRound className="w-4 h-4" />
+                  View Team
+                </button>
+              )}
               <button
-                onClick={() => navigate(`/project/${project.id}/workspace`)}
-                className="inline-flex items-center gap-1 px-2 py-1 text-sm text-primary-600 hover:bg-primary-50 rounded transition-colors"
-                title="View team members"
+                onClick={() => setShowRecs(!showRecs)}
+                className="inline-flex items-center gap-1 px-2 py-1 text-sm text-purple-600 hover:bg-purple-50 rounded transition-colors"
               >
-                <UsersRound className="w-4 h-4" />
-                View Team
+                <Sparkles className="w-4 h-4" />
+                {showRecs ? 'Hide Eligible Students' : 'Eligible Students'}
               </button>
-            )}
+            </div>
           </div>
           <p className="text-sm text-gray-600 mt-1 line-clamp-2">{project.description}</p>
           <div className="mt-3 flex items-center space-x-4 text-sm text-gray-500">
@@ -288,6 +324,48 @@ const ProjectCard = ({ project, navigate }) => {
           </div>
         </div>
       </div>
+
+      {/* Eligible Students Section */}
+      {showRecs && (
+        <div className="mt-4 pt-4 border-t bg-purple-50 -mx-4 px-4 pb-4 rounded-b-lg">
+          <h4 className="text-sm font-bold text-purple-900 mb-3 flex items-center">
+            <Sparkles className="w-4 h-4 mr-2" />
+            AI Recommended Students (Ranked by Verified Score)
+          </h4>
+          {recsLoading ? (
+            <div className="text-sm text-purple-600 py-2">Loading recommendations...</div>
+          ) : recs?.length > 0 ? (
+            <div className="space-y-2">
+              {recs.map((rec) => (
+                <div key={rec.student_id} className="bg-white p-3 rounded-md border border-purple-100 flex items-center justify-between shadow-sm">
+                  <div>
+                    <p className="font-semibold text-gray-900">{rec.student_name}</p>
+                    <p className="text-xs text-gray-500">
+                      Verified Skill: <span className="font-medium text-purple-700">{rec.skill_name}</span>
+                      (Score: <span className="font-bold text-primary-600">{rec.skill_score}</span>)
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => inviteMutation.mutate(rec.student_id)}
+                    disabled={inviteMutation.isLoading || rec.invitation_sent}
+                    className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors ${rec.invitation_sent
+                        ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                        : 'bg-primary-600 text-white hover:bg-primary-700'
+                      }`}
+                  >
+                    {rec.invitation_sent ? 'Invite Sent' : inviteMutation.isLoading ? 'Sending...' : 'Send Invite'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-purple-600 py-2 italic text-center">
+              No verified students found for the required skills yet.
+            </div>
+          )}
+        </div>
+      )}
+
       {project.teams && project.teams.length > 0 && (
         <div className="mt-4 pt-4 border-t">
           <p className="text-sm font-medium text-gray-700 mb-2">Formed Teams:</p>
@@ -304,8 +382,8 @@ const ProjectCard = ({ project, navigate }) => {
       {totalJoined > 0 && (!project.teams || project.teams.length === 0) && (
         <div className="mt-4 pt-4 border-t">
           <p className="text-sm text-gray-600">
-            {totalJoined} student{totalJoined !== 1 ? 's' : ''} joined. 
-            {totalJoined < project.preferred_team_size 
+            {totalJoined} student{totalJoined !== 1 ? 's' : ''} joined.
+            {totalJoined < project.preferred_team_size
               ? ` Need ${project.preferred_team_size - totalJoined} more to auto-form teams.`
               : ' Teams will be auto-formed when enough students join.'}
           </p>
